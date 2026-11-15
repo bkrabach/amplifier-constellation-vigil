@@ -139,6 +139,20 @@ Checked with `tests/runtime_matrix.py` (turn, brief, mind tool, recall in a new 
 
 To see why a runtime stalls, start the daemon with `VIGIL_TRACE=1`: `logs/vigil.log` then records the shape of every relayed message and every request to the mind's tool server, never their text. The matrix turns this on.
 
+### Trust for an experience's own tools
+
+Each experience hands the session its own tools (read the channel, add a reaction, schedule a continuation). The native engine asks for approval before using any it has not been told to trust, and a connector may decline or route that approval to a person. Name the ones you trust, by exact MCP endpoint:
+
+```toml
+[engine]
+# read-only tools of these endpoints run without asking
+trusted_mcp_readonly_urls = ["https://slack-connector.example:18444/context/mcp"]
+# named tools that change something, pre-approved one by one
+allowed_mcp_mutations = ["https://slack-connector.example:18444/context/mcp#slack_reactions_add"]
+```
+
+Run `vigil engine apply` after changing these. Without the first, the agent cannot search a channel it is asked about; without the second, every emoji reaction waits for someone's approval.
+
 ### A bridge from voice to the game
 
 ```toml

@@ -169,6 +169,11 @@ def apply_settings(config: Config) -> dict[str, Any]:
             settings[key] = overrides[key]
     url = config.mind_url
     kept = [entry for entry in settings.get("allowed_mcp_mutations", []) if not entry.startswith(url + "#")]
+    # An owner can pre-approve named tools of an experience (an emoji reaction, say), as
+    # "<exact MCP endpoint>#<tool>", so the agent is not stopped for approval each time.
+    for extra in overrides.get("allowed_mcp_mutations", []) or []:
+        if isinstance(extra, str) and "#" in extra and not extra.startswith(url + "#") and extra not in kept:
+            kept.append(extra)
     settings["allowed_mcp_mutations"] = kept + [f"{url}#{tool}" for tool in MUTATING_TOOLS]
     trusted = [entry for entry in settings.get("trusted_mcp_readonly_urls", []) if entry != url]
     for extra in overrides.get("trusted_mcp_readonly_urls", []) or []:
