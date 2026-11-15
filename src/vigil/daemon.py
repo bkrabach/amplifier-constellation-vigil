@@ -91,6 +91,7 @@ class Daemon:
             "runtime": {"main": self.config.main_runtime, "background": self.config.background_runtime, "configured": self.config.runtime_names(), "model": self.engine_model()},
             "attached": [{"link": link.id, "sessions": sorted(link.sessions), "seconds": int(time.time() - link.opened)} for link in self.links.values()],
             "turns_24h": store.one("SELECT count(*) AS n FROM events WHERE kind='prompt' AND ts>?", (day,))["n"],
+            "sessions_without_tools_24h": store.one("SELECT count(*) AS n FROM sessions WHERE updated>? AND turns>=1 AND tools_seen IS NULL", (day,))["n"],
             "quiet_wakes_24h": store.one("SELECT count(*) AS n FROM events WHERE kind='prompt' AND ts>? AND result LIKE '%quiet%'", (day,))["n"],
             "places": places,
             "people": store.one("SELECT count(*) AS n FROM people")["n"],

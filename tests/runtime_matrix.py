@@ -74,6 +74,7 @@ class Client:
         self.home = home
         self.text = ""
         self.permissions: list[str] = []
+        self.refused = 0
         self.proc = None
         self.conn: Connection | None = None
         self.init: dict = {}
@@ -89,7 +90,13 @@ class Client:
             call = params.get("toolCall") or {}
             self.permissions.append(json.dumps({"title": call.get("title"), "kind": call.get("kind"), "rawInput": call.get("rawInput")})[:240])
             options = params.get("options") or []
-            chosen = next((o for o in options if o.get("kind") == "allow_once"), options[0] if options else None)
+            # Approve only a request that names one of the mind's own tools, so its shape gets
+            # recorded. Anything else (a shell command, a file write) is refused: this harness
+            # runs unattended and must not let a model wander the machine.
+            wanted = "allow_once" if "mind_" in json.dumps([call.get("title"), call.get("rawInput")]) else "reject_once"
+            chosen = next((o for o in options if o.get("kind") == wanted), None)
+            if wanted == "reject_once":
+                self.refused += 1
             return {"outcome": {"outcome": "selected", "optionId": chosen["optionId"]}} if chosen else {"outcome": {"outcome": "cancelled"}}
         if is_notification:
             return None
@@ -147,11 +154,20 @@ def write_home(home: Path, entry: dict, port: int, engine_binary: str | None) ->
     lines += ["[runtimes.subject]", f'kind = "{kind}"', "command = " + json.dumps(command)]
     if entry.get("auth_method"):
         lines.append(f'auth_method = {json.dumps(entry["auth_method"])}')
+    if entry.get("mind_tools") is False:
+        lines.append("mind_tools = false")
     if env:
         lines += ["[runtimes.subject.env]"] + [f"{k} = {json.dumps(v)}" for k, v in env.items()]
     if secret_env:
         lines += ["[runtimes.subject.secret_env]"] + [f"{k} = {json.dumps(v)}" for k, v in secret_env.items()]
     (home / "vigil.toml").write_text("\n".join(lines) + "\n")
+    # Some agents need a file in their own home before they will use a client's tools
+    # (Gemini CLI opens MCP servers only in a folder it trusts). `runtime_files` maps a
+    # path under the runtime's private home to its content; {workspace} is substituted.
+    for relative, content in (entry.get("runtime_files") or {}).items():
+        target = home / "runtime-home" / "subject" / relative
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        target.write_text(content.replace("{workspace}", str(workspace)))
 
 
 async def sh(*args: str) -> None:
@@ -185,8 +201,8 @@ async def run_one(entry: dict, base: Path, engine_binary: str | None) -> dict:
         await first.attach()
         caps = first.init.get("agentCapabilities") or {}
         inner = ((first.init.get("_meta") or {}).get("dev.vigil") or {}).get("runtimeAgentInfo") or {}
-        http_mcp = (caps.get("mcpCapabilities") or {}).get("http") is True
-        result["notes"] = f"{inner.get('name', '?')} {inner.get('version', '')}".strip() + ("" if http_mcp else "; no HTTP MCP")
+        http_mcp = (caps.get("mcpCapabilities") or {}).get("http") is True and entry.get("mind_tools") is not False
+        result["notes"] = f"{inner.get('name', '?')} {inner.get('version', '')}".strip() + ("" if http_mcp else "; without the mind tools")
         sid = (await asyncio.wait_for(first.conn.send_request("session/new", {"cwd": str(home / "workspace"), "mcpServers": []}), 120))["sessionId"]
         text, stop = await first.prompt(sid, "In one short sentence: who am I to you, and what kind of place is this conversation?")
         result["turn"] = "ok" if text.strip() and stop == "end_turn" else f"stop={stop or 'none'}"
@@ -198,6 +214,8 @@ async def run_one(entry: dict, base: Path, engine_binary: str | None) -> dict:
         result["mind tool"] = "ok" if saved else ("n/a" if not http_mcp else "no")
         if first.permissions:
             result["notes"] += "; asked permission: " + first.permissions[0]
+        if first.refused:
+            result["notes"] += f"; {first.refused} other permission request(s) refused"
         await first.close()
 
         second = Client(home)

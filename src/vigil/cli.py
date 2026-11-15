@@ -170,6 +170,8 @@ def cmd_status(args: argparse.Namespace) -> None:
     print(f"attached now: {len(status['attached'])}; turns in 24h: {status['turns_24h']} (quiet wake-ups: {status['quiet_wakes_24h']})")
     print(f"memory: {status['people']} people, {status['notes']} notes, {status['journal']} journal entries; last consolidation: {status['last_dream'] or 'never'}")
     print(f"holding: {status['pending_follow_ups']} follow-up(s); tasks: {status['tasks'] or 'none'}")
+    if status.get("sessions_without_tools_24h"):
+        print(f"warning: {status['sessions_without_tools_24h']} conversation(s) in 24h where the engine never opened the memory tools (see logs/vigil.log)")
     print(f"decisions in 24h: {decisions['count']} ({decisions['ok']} answered, avg {decisions['avg_ms']} ms) via {', '.join(decisions['backends']) or 'rules only'}")
     for place in status["places"]:
         print(f"  {place['place_label'] or place['surface']:<40} {place['audience']:<8} {place['turns']} turn(s)")

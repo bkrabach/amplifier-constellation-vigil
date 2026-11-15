@@ -133,6 +133,31 @@ def test_relay_identity_brief_and_order(run):
     run(scenario)
 
 
+def test_a_runtime_that_never_opens_the_tools_is_told_so(run):
+    async def scenario(config, daemon):
+        from vigil.mind import TOOLS_MISSING
+
+        client = Client()
+        await client.attach(config)
+        briefs = {}
+        for name in ("silent", "opened"):
+            sid = (await client.conn.send_request("session/new", {"cwd": config.workspace, "mcpServers": []}))["sessionId"]
+            if name == "opened":  # a working runtime lists the tools before its first reply
+                token = next(t for t, s in daemon.mind.tokens.items() if s == sid)
+                assert daemon.mind.valid_token(token)
+            for text in ("hello", "please remember that I like tea"):
+                await client.conn.send_request("session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": slack("C1", "U2", text)}]})
+            state = json.loads((config.home / "fake-state.json").read_text())[sid]
+            briefs[name] = [blocks[-1]["text"] for blocks in state["prompts"]]
+        # The scripted runtime accepts the server and never calls it. One turn is given the
+        # benefit of the doubt; after that the model is told, so it does not hunt for a notebook.
+        assert TOOLS_MISSING not in briefs["silent"][0] and TOOLS_MISSING in briefs["silent"][1]
+        assert all(TOOLS_MISSING not in text for text in briefs["opened"])
+        assert daemon.store.one("SELECT count(*) AS n FROM sessions WHERE turns>=1 AND tools_seen IS NULL")["n"] == 1
+        await client.close()
+    run(scenario, port=47937)
+
+
 def test_permissions_own_tools_only(run):
     async def scenario(config, daemon):
         client = Client()

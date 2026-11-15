@@ -121,7 +121,12 @@ main = "native"        # the runtime conversations use
 background = "codex"   # the runtime delegated work uses
 ```
 
-The agent can also choose per task: `mind_delegate` takes an optional `runtime`. A runtime gets the mind tools if it accepts HTTP MCP servers at session setup. If a runtime asks to authenticate and the credential comes from `secret_env`, name the method (`auth_method = "api-key"` for Codex) and Vigil completes that step itself.
+The agent can also choose per task: `mind_delegate` takes an optional `runtime`. A runtime gets the mind tools if it accepts HTTP MCP servers at session setup. If a runtime asks to authenticate and the credential comes from `secret_env`, name the method (`auth_method = "api-key"` for Codex, `"gemini-api-key"` for Gemini CLI) and Vigil completes that step itself.
+
+When a runtime never opens the mind tools, Vigil says so in the brief from the second turn on, so the model declines to "remember" instead of hunting for a notebook in files and the web, and `vigil status` warns about it. Two cases need a setting:
+
+- **Gemini CLI** opens a client's MCP servers only in a folder it trusts. Its home under Vigil is `<vigil home>/runtime-home/<runtime name>`; put `{"<agent workspace>": "TRUST_FOLDER"}` in `.gemini/trustedFolders.json` there.
+- **An agent that refuses added MCP servers** (some fail the whole conversation): set `mind_tools = false` for that runtime. It still gets the presence brief.
 
 Checked with `tests/runtime_matrix.py` (turn, brief, mind tool, recall in a new session, reload):
 
@@ -129,8 +134,10 @@ Checked with `tests/runtime_matrix.py` (turn, brief, mind tool, recall in a new 
 | --- | --- |
 | Native engine: Anthropic (Opus, Sonnet, Haiku), OpenAI (Sol, Astra), Gemini (Flash) | all five checks pass |
 | Claude Agent ACP, Codex ACP, OpenCode, Copilot CLI | all five checks pass |
-| Gemini CLI | answers and reads the brief; its tool turn timed out |
-| Native engine `chat-completions` against api.openai.com | HTTP 400 from the endpoint; not yet diagnosed |
+| Gemini CLI, with its workspace trusted | all five checks pass |
+| Native engine `chat-completions` against api.openai.com | fails: the engine sends `max_tokens`, which current OpenAI models reject in favour of `max_completion_tokens` (an engine issue, reported upstream) |
+
+To see why a runtime stalls, start the daemon with `VIGIL_TRACE=1`: `logs/vigil.log` then records the shape of every relayed message and every request to the mind's tool server, never their text. The matrix turns this on.
 
 ### A bridge from voice to the game
 

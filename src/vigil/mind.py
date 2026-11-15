@@ -131,6 +131,15 @@ def spoken(text: str) -> str:
     return text
 
 
+#: Said in the brief when an engine has not opened the mind's tools. Without it a model
+#: asked to remember something goes looking for a notebook in files, the shell and the web.
+TOOLS_MISSING = (
+    "Your notebook, people and follow-up tools are not connected in this conversation, so you cannot save a note or schedule "
+    "anything from here. If you are asked to remember something or to come back to it, say plainly that you cannot do that from "
+    "this conversation right now. Do not look for a notebook in files, the shell or the web."
+)
+
+
 class Turn:
     """What the runtime produced during one prompt, as seen passing through."""
 
@@ -177,6 +186,9 @@ class Mind:
         self.memory: Memory = daemon.memory
         self.decider: decisions.Decider = daemon.decider
         self.tokens: dict[str, str] = {}
+        self.used_tokens: set[str] = set()
+        self.tools_ok: set[str] = set()
+        self.tools_warned: set[str] = set()
         self.scenes: dict[str, Scene] = {}
         self.servers: dict[str, list[dict[str, Any]]] = {}
         self.options: dict[str, list[dict[str, Any]]] = {}
@@ -205,6 +217,8 @@ class Mind:
                 "headers": [{"name": "Authorization", "value": f"Bearer {token}"}]}
 
     def supports_http_mcp(self, runtime: RuntimeProc) -> bool:
+        if not runtime.spec.mind_tools:
+            return False
         caps = ((runtime.initialize_result or {}).get("agentCapabilities") or {}).get("mcpCapabilities") or {}
         return caps.get("http") is True
 
@@ -236,6 +250,8 @@ class Mind:
             if isinstance(result, dict) and isinstance(result.get("configOptions"), list):
                 self.options[sid] = result["configOptions"]
             self.store.session_touch(sid, runtime=link.runtime.spec.name)
+            if token in self.used_tokens:
+                self._tools_opened(sid)
         return result
 
     def link_closed(self, link: Any) -> None:
@@ -247,12 +263,39 @@ class Mind:
         def drop() -> None:
             for token in dead:
                 self.tokens.pop(token, None)
+                self.used_tokens.discard(token)
 
         # A tool call can still be in flight when a client hangs up; keep its token briefly.
         asyncio.get_running_loop().call_later(120, drop)
 
     def valid_token(self, token: str) -> bool:
-        return token in self.tokens
+        """Called for every request to the mind's tool server. A valid request is also
+        the evidence that this session's runtime actually opened the tools."""
+        if token not in self.tokens:
+            return False
+        self.used_tokens.add(token)
+        if self.tokens[token]:
+            self._tools_opened(self.tokens[token])
+        return True
+
+    def _tools_opened(self, sid: str) -> None:
+        if sid not in self.tools_ok:
+            self.tools_ok.add(sid)
+            self.store.session_touch(sid, tools_seen=now())
+
+    def _tools_missing(self, sid: str, runtime: RuntimeProc | None = None) -> bool:
+        """True when this session's runtime will not have the mind tools: it was never
+        offered them (no HTTP MCP, or configured without), or it has completed a turn
+        without opening them. A working runtime lists tools before its first reply."""
+        if runtime is not None and not self.supports_http_mcp(runtime):
+            return True
+        if sid in self.tools_ok:
+            return False
+        row = self.store.session(sid)
+        if row and row["tools_seen"]:
+            self.tools_ok.add(sid)
+            return False
+        return bool(row and (row["turns"] or 0) >= 1)
 
     # ---- observing the stream ------------------------------------------------------
     def observe_update(self, link: Any, params: dict[str, Any]) -> dict[str, Any] | None:
@@ -341,6 +384,11 @@ class Mind:
                 extras["recall"] = self.memory.search(scene, scene.heard, 4)
             if scene.wake:
                 extras["lines"] = ["This turn exists because something you were holding is due. Deliver it now."]
+            if self._tools_missing(sid, link.runtime):
+                extras.setdefault("lines", []).append(TOOLS_MISSING)
+                if sid not in self.tools_warned:
+                    self.tools_warned.add(sid)
+                    log.warning("session %s: runtime %s never opened the mind tools; the agent has no notebook or follow-ups there", sid, link.runtime.spec.name)
             text, surfaced = brief.compose(scene, self.memory, self.config, extras)
             params["prompt"] = blocks + [brief.block(text)]
             if effort:

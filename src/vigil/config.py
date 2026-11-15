@@ -35,6 +35,10 @@ class RuntimeSpec:
     #: An ACP auth method the runtime accepts without a person, such as "api-key" when
     #: the key is supplied through `secret_env`. Used when the runtime asks to authenticate.
     auth_method: str = ""
+    #: Set false for an agent that advertises HTTP MCP but refuses servers a client adds
+    #: (some fail the whole conversation). Vigil then keeps its tools back and tells the
+    #: model it has no notebook there; the presence brief still works.
+    mind_tools: bool = True
 
 
 @dataclass
@@ -168,6 +172,7 @@ class Config:
             secret_env=dict(table.get("secret_env") or {}),
             kind=table.get("kind", "acp"),
             auth_method=str(table.get("auth_method", "")),
+            mind_tools=table.get("mind_tools", True) is not False,
         )
 
     def runtime_env(self, spec: RuntimeSpec) -> dict[str, str]:

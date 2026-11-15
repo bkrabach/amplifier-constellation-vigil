@@ -81,6 +81,8 @@ class Store:
         self.db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        if "tools_seen" not in {row["name"] for row in self.q("PRAGMA table_info(sessions)")}:
+            self.run("ALTER TABLE sessions ADD COLUMN tools_seen REAL")
 
     def close(self) -> None:
         self.db.close()
