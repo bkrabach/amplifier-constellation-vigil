@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import shlex
 import sys
 import time
 import tomllib
@@ -49,11 +50,13 @@ async def main() -> None:
     parser.add_argument("--session")
     parser.add_argument("--load", action="store_true")
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument("--command", help="attach command to run instead of `vigil acp`, e.g. an Instance's `agent-instance acp --home ...`")
+    parser.add_argument("--cwd", help="session working folder (default: the workspace in vigil.toml)")
     parser.add_argument("texts", nargs="+")
     args = parser.parse_args()
-    workspace = tomllib.loads((Path(args.home) / "vigil.toml").read_text())["agent"]["workspace"].replace("${VIGIL_HOME}", args.home)
-
-    proc = await asyncio.create_subprocess_exec(VIGIL, "acp", "--home", args.home, stdin=asyncio.subprocess.PIPE,
+    workspace = args.cwd or tomllib.loads((Path(args.home) / "vigil.toml").read_text())["agent"]["workspace"].replace("${VIGIL_HOME}", args.home)
+    command = shlex.split(args.command) if args.command else [VIGIL, "acp", "--home", args.home]
+    proc = await asyncio.create_subprocess_exec(*command, stdin=asyncio.subprocess.PIPE,
                                                 stdout=asyncio.subprocess.PIPE, limit=32 * 1024 * 1024)
     replaying = False
 

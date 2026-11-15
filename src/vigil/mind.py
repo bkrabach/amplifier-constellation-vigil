@@ -71,7 +71,7 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "mind_follow_up",
-        "description": "Hold a thought to return to later. Give 'in_minutes' or an ISO 'at' time. Scope 'here' brings it back in this conversation, 'person' the next time you talk with that person in a suitable place, 'owner' the next time you talk privately with your owner. Use it whenever you promise to check, remind or get back to someone.",
+        "description": "Hold a thought to return to later. Give 'in_minutes' or an ISO 'at' time. Scope 'here' brings it back in this conversation, 'person' the next time you talk with that person in a suitable place, 'owner' the next time you talk privately with your owner. Leave scope out to let your core choose the one most likely to reach them. Use it whenever you promise to check, remind or get back to someone.",
         "inputSchema": {"type": "object", "properties": {"about": {"type": "string", "description": "What to bring up, written so it makes sense later without this conversation."}, "in_minutes": {"type": "number", "minimum": 0}, "at": {"type": "string"}, "scope": {"type": "string", "enum": ["here", "person", "owner"]}, "who": {"type": "string", "description": "For scope 'person': their name. Defaults to whoever is speaking."}, "repeat_every_minutes": {"type": "number", "minimum": 5}}, "required": ["about"], "additionalProperties": False},
         "annotations": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False},
     },
@@ -298,7 +298,9 @@ class Mind:
     async def prompt(self, link: Any, params: dict[str, Any]) -> Any:
         sid = params.get("sessionId") or ""
         meta = params.get("_meta") or {}
-        if MAINTENANCE_META in meta:  # a compaction request, not a conversation turn
+        if MAINTENANCE_META in meta or sid in self.turns:
+            # A compaction request is not a conversation turn. A second prompt while one
+            # is in flight is the runtime's to accept or refuse; the mind stays with the first.
             return await link.runtime.request("session/prompt", params)
         blocks = [b for b in params.get("prompt") or [] if isinstance(b, dict)]
         scene = surfaces.read(sid, blocks, meta)
@@ -559,7 +561,11 @@ class Mind:
                 raise ToolError("'at' must be an ISO time such as 2026-11-16T09:00.") from None
         elif args.get("in_minutes") is not None:
             due = now() + float(args["in_minutes"]) * 60
-        scope = str(args.get("scope") or "here")
+        scope = str(args.get("scope") or "")
+        if scope not in ("here", "person", "owner"):
+            # Unless told otherwise: stay in this conversation when it can bring the
+            # thought back by itself or others are listening; otherwise follow the person.
+            scope = "here" if scene.surface == "slack" or not scene.private else "person"
         person = None
         if scope == "person":
             who = str(args.get("who") or "")
@@ -573,6 +579,8 @@ class Mind:
         note = ""
         if scope == "here" and scene.surface != "slack":
             note = " This place cannot wake you on its own, so you will see it on the next message here after it is due."
+        elif scope == "person" and not args.get("scope"):
+            note = " This place cannot wake you on its own, so it follows the person instead."
         return f"Held as follow-up #{thought_id}, due {when}. {how}.{note}"
 
     def _agenda(self, scene: Scene, show: str = "all") -> str:

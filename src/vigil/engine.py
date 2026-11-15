@@ -175,6 +175,14 @@ def apply_settings(config: Config) -> dict[str, Any]:
         if extra not in trusted:
             trusted.append(extra)
     settings["trusted_mcp_readonly_urls"] = trusted + [url]
+    # Let people show the agent things: photos on a call, images and PDFs in a channel.
+    native = dict(provider.get("native") or {})
+    if provider["kind"] != "mock":
+        native.setdefault("image_input", True)
+    if provider["kind"] in ("openai", "azure-openai", "anthropic", "gemini"):
+        native.setdefault("pdf_input", True)
+    if native:
+        provider["native"] = native
     efforts = ["low", "medium", "high"]
     if provider.get("reasoning_effort") in efforts:
         names = [bound] + [m for m in SIBLINGS.get(provider["kind"], []) if m != bound]
