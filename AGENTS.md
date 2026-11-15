@@ -37,4 +37,8 @@ Vigil is an always-on engine for a Constellation Agent Instance. Read [README.md
 
 `tests/test_conductor.py` runs the real daemon against `tests/fake_runtime.py` and checks ordering, permissions, replay and the quiet wake-up. `tests/drive.py` talks to a live daemon as an experience would, including through an Instance with `--command`. A passing suite shows mechanics; judge model behaviour with real turns.
 
+## Testing against a live agent
+
+Rehearsals leave memories. Before driving a deployed agent with scripted people, list the test places under `mind.rehearsal_places` in its `vigil.toml` so nothing learned there reaches real work. Afterwards, `vigil memory forget --place <prefix> --people` shows what a clean-up would remove and `--apply` removes it. Do not edit the SQLite file by hand: the search indexes go stale.
+
 When a surface changes its prompt format, update its reader and its test together. When you learn something that would have saved you time, put it in this file.

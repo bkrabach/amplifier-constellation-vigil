@@ -100,6 +100,89 @@ class Memory:
         names = [self.name_of(p) for p in self._present(scene) if p in there]
         return ", ".join(names[:3])
 
+    # ---- rehearsal places ----------------------------------------------------------
+    def _rehearsal_prefixes(self) -> list[str]:
+        value = self.config.mind("rehearsal_places", []) or []
+        return [p for p in value if isinstance(p, str) and p]
+
+    def is_rehearsal(self, place: str | None) -> bool:
+        """A place the owner marked as practice: a test workspace, a scratch world."""
+        return bool(place) and any(place.startswith(prefix) for prefix in self._rehearsal_prefixes())
+
+    def _outside_rehearsal(self, scene: Scene, column: str = "place") -> tuple[str, list[Any]]:
+        """SQL that hides what was learned in a rehearsal place from every scene outside
+        one. Inside a rehearsal place everything follows the ordinary rules."""
+        prefixes = self._rehearsal_prefixes()
+        if not prefixes or self.is_rehearsal(scene.place):
+            return "1", []
+        clause = " AND ".join(f"substr(COALESCE({column},''),1,?)!=?" for _ in prefixes)
+        return f"({clause})", [value for prefix in prefixes for value in (len(prefix), prefix)]
+
+    def known_here(self, scene: Scene, who: dict[str, Any]) -> bool:
+        """Someone met only in a rehearsal place is a stranger outside one."""
+        if who.get("is_owner") or scene.audience == "owner" or self.is_rehearsal(scene.place):
+            return True
+        surfaces = [i["surface"] for i in who.get("identities", [])]
+        return not surfaces or not all(self.is_rehearsal(surface) for surface in surfaces)
+
+    def forget(self, place: str | None, since: float | None, until: float | None, people: bool, apply: bool) -> dict[str, int]:
+        """Remove what was recorded in a place (by key prefix) and/or a time window.
+
+        This is for clearing practice runs and mistakes. It deletes journal entries,
+        notes, held thoughts, tasks, sessions and inbox rows. With ``people``, it also
+        removes people who are then referenced by nothing, unless their accounts were
+        linked across places.
+        Without ``apply`` it only counts."""
+        if not place and since is None:
+            raise ValueError("give a place, a start time, or both")
+        counts: dict[str, int] = {}
+        for table, stamp in (("journal", "ts"), ("notes", "ts"), ("thoughts", "ts"), ("tasks", "ts"), ("events", "ts"), ("sessions", "created")):
+            where, args = ["1"], []
+            if place:
+                where.append("substr(COALESCE(place,''),1,?)=?")
+                args += [len(place), place]
+            if since is not None:
+                where.append(f"{stamp}>=?")
+                args.append(since)
+            if until is not None:
+                where.append(f"{stamp}<=?")
+                args.append(until)
+            if table == "events":
+                where.append("status!='running'")
+            clause = " AND ".join(where)
+            ids = [row[0] for row in self.store.q(f"SELECT {'rowid' if table == 'sessions' else 'id'} FROM {table} WHERE {clause}", args)]
+            counts[table] = len(ids)
+            if not apply or not ids:
+                continue
+            for start in range(0, len(ids), 400):
+                chunk = ids[start:start + 400]
+                marks = ",".join("?" * len(chunk))
+                if table in ("journal", "notes"):
+                    self.store.run(f"DELETE FROM {table}_fts WHERE rowid IN ({marks})", chunk)
+                self.store.run(f"DELETE FROM {table} WHERE {'rowid' if table == 'sessions' else 'id'} IN ({marks})", chunk)
+        counts["people"] = 0
+        if people:
+            referenced: set[str] = set()
+            for row in self.store.q("SELECT actor, people FROM journal"):
+                referenced.add(row["actor"] or "")
+                try:
+                    referenced.update(json.loads(row["people"] or "[]"))
+                except ValueError:
+                    pass
+            for table in ("notes", "thoughts", "tasks"):
+                referenced.update(row["person"] or "" for row in self.store.q(f"SELECT person FROM {table}"))
+            for row in self.store.q("SELECT id FROM people WHERE is_owner=0"):
+                if row["id"] in referenced:
+                    continue
+                surfaces = [r["surface"] for r in self.store.q("SELECT surface FROM identities WHERE person=?", (row["id"],))]
+                if len(surfaces) > 1 and not (place and all(surface.startswith(place) for surface in surfaces)):
+                    continue  # accounts linked across places are worth keeping even with no history
+                counts["people"] += 1
+                if apply:
+                    self.store.run("DELETE FROM identities WHERE person=?", (row["id"],))
+                    self.store.run("DELETE FROM people WHERE id=?", (row["id"],))
+        return counts
+
     # ---- people --------------------------------------------------------------------
     def seed_owner(self) -> None:
         owner = self.config.owner
@@ -258,11 +341,16 @@ class Memory:
         self.store.run("DELETE FROM notes_fts WHERE rowid=?", (note_id,))
         return True
 
-    def _note_filter(self, scene: Scene) -> tuple[str, list[Any]]:
+    def _note_filter(self, scene: Scene, asked: bool = False) -> tuple[str, list[Any]]:
+        """``asked`` marks an explicit lookup. The owner, asking in private, may look up
+        what happened in a rehearsal place; nothing from one surfaces unasked."""
         if scene.audience == "owner":
-            return "archived=0 AND (audience!='dm' OR place=?)", [scene.place]
+            guard, guard_args = ("1", []) if asked else self._outside_rehearsal(scene)
+            return f"archived=0 AND (audience!='dm' OR place=?) AND {guard}", [scene.place, *guard_args]
+        guard, guard_args = self._outside_rehearsal(scene)
         shared, args = self._overlap(scene)
-        return f"archived=0 AND (visibility='anywhere' OR (visibility='here' AND (place=? OR {shared})))", [scene.place, *args]
+        return (f"archived=0 AND {guard} AND (visibility='anywhere' OR (visibility='here' AND (place=? OR {shared})))",
+                [*guard_args, scene.place, *args])
 
     def notes_about(self, scene: Scene, person_id: str, limit: int = 3) -> list[dict[str, Any]]:
         where, args = self._note_filter(scene)
@@ -289,13 +377,15 @@ class Memory:
         self.store.run("INSERT INTO journal_fts(rowid,heard,said) VALUES(?,?,?)", (row_id, scene.heard[:4000], said[:4000]))
         return row_id
 
-    def _journal_filter(self, scene: Scene) -> tuple[str, list[Any]]:
+    def _journal_filter(self, scene: Scene, asked: bool = False) -> tuple[str, list[Any]]:
         if scene.audience == "owner":
-            return "(audience!='dm' OR place=?)", [scene.place]
+            guard, guard_args = ("1", []) if asked else self._outside_rehearsal(scene)
+            return f"(audience!='dm' OR place=?) AND {guard}", [scene.place, *guard_args]
         if self.policy != "overlap":
             return "place=?", [scene.place]
+        guard, guard_args = self._outside_rehearsal(scene)
         shared, args = self._overlap(scene)
-        return f"(place=? OR {shared})", [scene.place, *args]
+        return f"(place=? OR ({shared} AND {guard}))", [scene.place, *args, *guard_args]
 
     def last_here(self, scene: Scene) -> dict[str, Any] | None:
         row = self.store.one("SELECT ts, heard, said FROM journal WHERE place=? ORDER BY ts DESC LIMIT 1", (scene.place,))
@@ -304,11 +394,12 @@ class Memory:
     def elsewhere(self, scene: Scene, limit: int = 5, since_hours: float = 72) -> list[dict[str, Any]]:
         """Recent turns in other places that this audience may know about."""
         cutoff = now() - since_hours * 3600
+        guard, guard_args = self._outside_rehearsal(scene)
         if scene.audience == "owner":
             rows = self.store.q(
                 "SELECT ts,surface,place_label,actor_name,heard,said,audience FROM journal "
-                "WHERE place!=? AND audience!='dm' AND ts>? AND (said!='' OR heard!='') ORDER BY ts DESC LIMIT ?",
-                (scene.place, cutoff, limit),
+                f"WHERE place!=? AND audience!='dm' AND {guard} AND ts>? AND (said!='' OR heard!='') ORDER BY ts DESC LIMIT ?",
+                (scene.place, *guard_args, cutoff, limit),
             )
             return [dict(r) for r in rows]
         shared, args = self._overlap(scene)
@@ -318,8 +409,8 @@ class Memory:
         said = "said" if self.policy == "overlap" else "''"
         rows = self.store.q(
             f"SELECT ts,surface,place_label,actor_name,heard,{said} AS said,audience,people FROM journal "
-            f"WHERE place!=? AND {shared} AND ts>? AND (heard!='' OR said!='') ORDER BY ts DESC LIMIT ?",
-            (scene.place, *args, cutoff, min(limit, 3)),
+            f"WHERE place!=? AND {shared} AND {guard} AND ts>? AND (heard!='' OR said!='') ORDER BY ts DESC LIMIT ?",
+            (scene.place, *args, *guard_args, cutoff, min(limit, 3)),
         )
         return [dict(r) | {"with": self.who_was_there(scene, r["people"])} for r in rows]
 
@@ -328,14 +419,14 @@ class Memory:
         if not match:
             return []
         hits: list[dict[str, Any]] = []
-        where, args = self._note_filter(scene)
+        where, args = self._note_filter(scene, asked=True)
         for row in self.store.q(
             f"SELECT n.id,n.subject,n.text,n.ts,n.place,n.audience FROM notes_fts f JOIN notes n ON n.id=f.rowid "
             f"WHERE notes_fts MATCH ? AND {where} ORDER BY bm25(notes_fts) LIMIT ?",
             (match, *args, limit),
         ):
             hits.append({"kind": "note", "id": row["id"], "subject": row["subject"], "text": row["text"], "ts": row["ts"]})
-        where, args = self._journal_filter(scene)
+        where, args = self._journal_filter(scene, asked=True)
         for row in self.store.q(
             f"SELECT j.id,j.ts,j.place,j.place_label,j.actor_name,j.heard,j.said,j.people FROM journal_fts f JOIN journal j ON j.id=f.rowid "
             f"WHERE journal_fts MATCH ? AND {where} ORDER BY bm25(journal_fts) LIMIT ?",
@@ -364,8 +455,11 @@ class Memory:
         """Thoughts that may be delivered in this scene now."""
         rows = self.store.q("SELECT * FROM thoughts WHERE state='pending' AND due<=? ORDER BY due LIMIT 40", (now() + horizon,))
         out = []
+        practice_only = not self.is_rehearsal(scene.place)
         for row in rows:
             scope, origin = row["scope"], row["audience"]
+            if practice_only and scope == "person" and self.is_rehearsal(row["place"]):
+                continue  # a promise made in practice is kept in practice
             if scope == "here":
                 ok = row["place"] == scene.place
             elif scope == "owner":

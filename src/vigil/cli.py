@@ -141,11 +141,21 @@ def _control(args: argparse.Namespace, path: str, method: str = "GET") -> dict:
     config = Config.load(args.home)
     request = urllib.request.Request(f"http://127.0.0.1:{config.mcp_port}{path}", method=method,
                                      headers={"Authorization": f"Bearer {config.secret('control-token') or ''}"})
-    try:
-        with urllib.request.urlopen(request, timeout=900) as response:
-            return json.load(response)
-    except urllib.error.URLError as error:
-        sys.exit(f"The daemon is not answering on port {config.mcp_port}: {error.reason if hasattr(error, 'reason') else error}")
+    import time
+
+    # A daemon that was just (re)started needs a moment before it listens.
+    for attempt in range(8):
+        try:
+            with urllib.request.urlopen(request, timeout=900) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as error:
+            sys.exit(f"The daemon refused the request: HTTP {error.code}")
+        except urllib.error.URLError as error:
+            refused = isinstance(getattr(error, "reason", None), ConnectionRefusedError)
+            if not refused or attempt == 7:
+                sys.exit(f"The daemon is not answering on port {config.mcp_port}: {error.reason if hasattr(error, 'reason') else error}")
+            time.sleep(0.5)
+    raise AssertionError("unreachable")
 
 
 def cmd_status(args: argparse.Namespace) -> None:
@@ -225,6 +235,44 @@ def cmd_memory(args: argparse.Namespace) -> None:
     elif args.action == "decisions":
         for row in store.q("SELECT ts, purpose, backend, ms, ok, answers, error FROM decisions ORDER BY ts DESC LIMIT ?", (args.limit,)):
             print(f"{row['purpose']:<9} {row['backend']:<10} {row['ms']:>5} ms {'ok ' if row['ok'] else 'ERR'} {row['answers'] or row['error']}")
+    elif args.action == "places":
+        from .memory import Memory
+
+        memory = Memory(store, config)
+        for row in store.q("SELECT place, max(place_label) AS label, count(*) AS n, max(ts) AS last FROM journal GROUP BY place ORDER BY last DESC"):
+            mark = "  [rehearsal]" if memory.is_rehearsal(row["place"]) else ""
+            print(f"{row['n']:>5} turn(s)  {row['place']}  ({row['label']}){mark}")
+    elif args.action == "forget":
+        from .memory import Memory
+
+        if not args.place and not args.since:
+            sys.exit("Say what to forget: --place KEY-PREFIX, --since WHEN, or both. `vigil memory places` lists place keys.")
+        try:
+            since = _when(args.since) if args.since else None
+            until = _when(args.until) if args.until else None
+        except ValueError as error:
+            sys.exit(str(error))
+        counts = Memory(store, config).forget(args.place, since, until, args.people, args.apply)
+        summary = ", ".join(f"{count} {name}" for name, count in counts.items() if count) or "nothing"
+        print(("Removed: " if args.apply else "Would remove: ") + summary + ("" if args.apply else ". Add --apply to do it."))
+
+
+def _when(text: str) -> float:
+    """A point in time: "90m", "2h" or "3d" ago, or a local "YYYY-MM-DD[ HH:MM]"."""
+    import datetime
+    import re
+    import time
+
+    text = text.strip()
+    relative = re.fullmatch(r"(\d+)\s*([mhd])", text)
+    if relative:
+        return time.time() - int(relative.group(1)) * {"m": 60, "h": 3600, "d": 86400}[relative.group(2)]
+    for pattern in ("%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.datetime.strptime(text, pattern).timestamp()
+        except ValueError:
+            continue
+    raise ValueError(f"Cannot read the time {text!r}. Use 90m, 2h, 3d, or YYYY-MM-DD HH:MM.")
 
 
 def main() -> None:
@@ -285,9 +333,14 @@ def main() -> None:
     p.add_argument("--handle")
     p.set_defaults(func=cmd_people)
 
-    p = sub.add_parser("memory", help="inspect notes, journal, agenda and decisions")
-    p.add_argument("action", choices=["notes", "journal", "agenda", "decisions"])
+    p = sub.add_parser("memory", help="inspect notes, journal, agenda, decisions and places; forget a practice run")
+    p.add_argument("action", choices=["notes", "journal", "agenda", "decisions", "places", "forget"])
     p.add_argument("--limit", type=int, default=30)
+    p.add_argument("--place", help="forget: place key prefix, as listed by `vigil memory places`")
+    p.add_argument("--since", help="forget: from this time (90m, 2h, 3d, or YYYY-MM-DD HH:MM)")
+    p.add_argument("--until", help="forget: up to this time")
+    p.add_argument("--people", action="store_true", help="forget: also remove people left with no history (linked accounts are kept)")
+    p.add_argument("--apply", action="store_true", help="forget: actually delete (the default only counts)")
     p.set_defaults(func=cmd_memory)
 
     # `vigil engine init -- <agent-runtime init arguments>` hands everything after

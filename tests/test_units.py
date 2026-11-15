@@ -191,6 +191,61 @@ def test_shared_spaces_travel_with_the_people_in_them(memory: Memory):
     assert "skip the CSV" in text(with_maya, "CSV") and "worries" not in text(with_maya, "CSV decision worries")
 
 
+def test_rehearsal_places_keep_practice_out_of_real_work(memory: Memory):
+    memory.config.raw.setdefault("mind", {})["rehearsal_places"] = ["slack:TEST"]
+    owner_real, owner_test = Who("slack:T1", "UOWNER", "Olive"), Who("slack:TEST", "XOWNER", "Olive")
+    owner_id = memory.resolve(owner_real)
+    memory._bind("slack:TEST", "XOWNER", owner_id, "Olive", True, "configured", False)
+    sam = Who("slack:TEST", "XSAM", "Sam (simulation)")
+    practice = scene_for(memory, "slack:TEST:C1", "group", sam, [owner_test])
+    practice.heard = "practice decision: the pretend launch moves to Friday"
+    memory.journal_add(practice, "Noted for the drill.", "", "end_turn")
+    memory.note_add(practice, "pretend launch", "The pretend launch is on Friday.", "here")
+    memory.thought_add(practice, "followup", "ask Olive how the drill went", 0, "person", person=owner_id)
+    text = lambda scene, q: " ".join(str(h.get("text", "")) + str(h.get("heard", "")) for h in memory.search(scene, q))  # noqa: E731
+    # A real room where the owner is present: ordinary overlap would carry it; rehearsal does not.
+    real = scene_for(memory, "slack:T1:CREAL", "group", Who("slack:T1", "U2", "Dana"), [owner_real])
+    assert text(real, "pretend launch Friday") == "" and memory.elsewhere(real) == []
+    assert memory.note_subjects(real) == (0, [])
+    assert memory.thoughts_due(scene_for(memory, "slack:T1:CREAL", "group", owner_real)) == []
+    # Another room of the same practice workspace follows the ordinary rules.
+    practice_two = scene_for(memory, "slack:TEST:C2", "group", owner_test)
+    assert "Friday" in text(practice_two, "pretend launch Friday") and memory.elsewhere(practice_two)
+    assert [t["text"] for t in memory.thoughts_due(practice_two)] == ["ask Olive how the drill went"]
+    # The owner, in private: nothing surfaces unasked, but an explicit lookup finds it.
+    private = scene_for(memory, "slack:T1:D1", "dm", owner_real)
+    assert private.audience == "owner" and memory.elsewhere(private) == [] and memory.note_subjects(private) == (0, [])
+    assert "Friday" in text(private, "pretend launch Friday")
+    # Someone met only in practice is a stranger in real work.
+    sam_record = memory.person(memory.resolve(sam))
+    assert not memory.known_here(real, sam_record) and memory.known_here(practice_two, sam_record) and memory.known_here(private, sam_record)
+
+
+def test_forget_removes_a_practice_run_and_nothing_else(memory: Memory):
+    real = scene_for(memory, "slack:T1:C1", "group", Who("slack:T1", "U2", "Dana"))
+    real.heard = "the real roadmap review is on Tuesday"
+    memory.journal_add(real, "Got it.", "", "end_turn")
+    memory.note_add(real, "roadmap", "Roadmap review is Tuesday.", "here")
+    drill = scene_for(memory, "slack:TEST:C1", "group", Who("slack:TEST", "XSAM", "Sam (simulation)"))
+    drill.heard = "drill: pretend the database is down"
+    memory.journal_add(drill, "Pretending.", "", "end_turn")
+    memory.note_add(drill, "drill", "The database outage was pretend.", "here")
+    memory.thought_add(drill, "followup", "check the pretend database", 0, "here")
+    count = lambda table: memory.store.one(f"SELECT count(*) AS n FROM {table}")["n"]  # noqa: E731
+    with pytest.raises(ValueError):
+        memory.forget(None, None, None, False, True)
+    preview = memory.forget("slack:TEST", None, None, True, False)
+    assert (preview["journal"], preview["notes"], preview["thoughts"]) == (1, 1, 1)
+    assert preview["people"] == 0 and count("journal") == 2  # counting changes nothing; Sam is still referenced
+    removed = memory.forget("slack:TEST", None, None, True, True)
+    assert (removed["journal"], removed["notes"], removed["thoughts"], removed["people"]) == (1, 1, 1, 1)
+    assert count("journal") == 1 and count("notes") == 1 and count("thoughts") == 0
+    assert [h["kind"] for h in memory.search(real, "roadmap Tuesday")] == ["note", "journal"]
+    assert memory.search(drill, "pretend database") == []  # the search index was cleared too
+    names = {row["name"] for row in memory.store.q("SELECT name FROM people")}
+    assert "Dana" in names and "Olive" in names and "Sam (simulation)" not in names
+
+
 def test_thought_scopes(memory: Memory):
     here = scene_for(memory, "slack:T1:C1", "group", Who("slack:T1", "U2", "Dana"))
     memory.thought_add(here, "followup", "check the deploy", 0, "here")

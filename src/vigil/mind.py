@@ -584,7 +584,7 @@ class Mind:
         lines = []
         for person_id in ids:
             who = memory.person(person_id)
-            if not who:
+            if not who or not memory.known_here(scene, who):
                 continue
             kind = "your owner" if who["is_owner"] else ("an agent" if who["is_agent"] else "a person")
             if scene.audience == "owner":
@@ -687,8 +687,10 @@ class Mind:
         if not rows:
             return {"entries": 0, "kept": 0}
         kept = []
-        for start in range(0, len(rows), 24):
-            chunk = rows[start:start + 24]
+        # Practice stays in practice: nothing from a rehearsal place becomes a lasting note.
+        scored = [r for r in rows if not self.memory.is_rehearsal(r["place"])]
+        for start in range(0, len(scored), 24):
+            chunk = scored[start:start + 24]
             state = {"entries": [{"index": i, "who": r["actor_name"], "heard": clip(r["heard"], 260), "agent_said": clip(r["said"], 260)} for i, r in enumerate(chunk)]}
             answers = await self.decider.ask("salience", state, decisions.salience_questions(len(chunk)), timeout=8.0) if self.decider.available else None
             for i, row in enumerate(chunk):

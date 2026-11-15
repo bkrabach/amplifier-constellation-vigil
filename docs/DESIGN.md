@@ -60,6 +60,8 @@ Evidence for the audience comes from two places. The strongest is the binding an
 
 The third column of the middle row is the important one. If Maya is in two channels, what was decided in the first can surface in the second even when someone else there asks, because Maya could have said it herself. With nobody in common, nothing crosses. Whether to *say* it is then the agent's judgment, and the standing guidance tells it to mention where something came from and to ask before repeating something from a small room in a much larger one. Tool results obey the same rule, so the model cannot retrieve what the brief would not have shown.
 
+Places the owner marks as rehearsal (`mind.rehearsal_places`) sit outside this table. Without that mark, a test workspace leaks into real work through the one person who is in both: the owner. With it, what was learned in a rehearsal place surfaces only in rehearsal places, a follow-up promised there is delivered there, nothing from it is consolidated, and only the owner, asking in private, can look it up.
+
 `mind.cross_space` selects the policy: `overlap` (above, the default), `hints` (other shared spaces appear only as one-line reminders for the person speaking), or `strict` (nothing crosses between places).
 
 In a scripted day across two channels, a thread, direct messages, a game world and a voice call (`tests/etiquette/journey.py`), the agent carried a decision to the sub-team that needed it, recognised a linked teammate in the game, turned away a stranger, and kept a confidence when its owner asked directly.
