@@ -1,0 +1,76 @@
+{
+  "runtimes": [
+    {
+      "name": "native-anthropic",
+      "engine": [
+        "--provider",
+        "anthropic",
+        "--model",
+        "claude-haiku-5-5",
+        "--key-env",
+        "AGENT_MODEL_API_KEY",
+        "--reasoning-effort",
+        "low"
+      ],
+      "secret_env": {
+        "AGENT_MODEL_API_KEY": "ANTHROPIC_API_KEY"
+      }
+    },
+    {
+      "name": "native-openai",
+      "engine": [
+        "--provider",
+        "openai",
+        "--model",
+        "gpt-6.1-sol",
+        "--key-env",
+        "AGENT_MODEL_API_KEY",
+        "--reasoning-effort",
+        "low"
+      ],
+      "secret_env": {
+        "AGENT_MODEL_API_KEY": "OPENAI_API_KEY"
+      }
+    },
+    {
+      "name": "acp-claude-agent",
+      "command": [
+        "npx",
+        "-y",
+        "@agentclientprotocol/claude-agent-acp@0.107.0"
+      ],
+      "secret_env": {
+        "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY"
+      }
+    },
+    {
+      "name": "acp-codex",
+      "command": [
+        "npx",
+        "-y",
+        "@agentclientprotocol/codex-acp@2.6.0"
+      ],
+      "auth_method": "api-key",
+      "secret_env": {
+        "OPENAI_API_KEY": "OPENAI_API_KEY",
+        "CODEX_API_KEY": "OPENAI_API_KEY"
+      }
+    },
+    {
+      "name": "acp-gemini-cli",
+      "command": [
+        "npx",
+        "-y",
+        "@google/gemini-cli@0.68.0",
+        "--acp"
+      ],
+      "auth_method": "gemini-api-key",
+      "secret_env": {
+        "GEMINI_API_KEY": "GOOGLE_API_KEY"
+      },
+      "runtime_files": {
+        ".gemini/trustedFolders.json": "{\"{workspace}\": \"TRUST_FOLDER\"}"
+      }
+    }
+  ]
+}

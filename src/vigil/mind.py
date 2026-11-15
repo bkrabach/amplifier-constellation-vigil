@@ -21,7 +21,7 @@ from typing import Any
 
 import aiohttp
 
-from . import brief, decisions, prompts, surfaces
+from . import bridges, brief, decisions, prompts, surfaces
 from .conductor import VIGIL_META, RuntimeProc
 from .mcp import ToolError, call_tool
 from .memory import Memory, clip
@@ -71,7 +71,7 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "mind_follow_up",
-        "description": "Hold a thought to return to later. Give 'in_minutes' or an ISO 'at' time. Scope 'here' brings it back in this conversation, 'person' the next time you talk with that person in a suitable place, 'owner' the next time you talk privately with your owner. Leave scope out to let your core choose the one most likely to reach them. Use it whenever you promise to check, remind or get back to someone.",
+        "description": "Hold a thought to return to later. Give 'in_minutes' or an ISO 'at' time. Scope 'here' brings it back in this conversation, 'person' the next time you talk with that person in a suitable place (give 'who' when it is someone other than the speaker, or when it belongs in another place), 'owner' the next time you talk privately with your owner. Leave scope out to let your core choose the one most likely to reach them. Use it whenever you promise to check, remind or get back to someone.",
         "inputSchema": {"type": "object", "properties": {"about": {"type": "string", "description": "What to bring up, written so it makes sense later without this conversation."}, "in_minutes": {"type": "number", "minimum": 0}, "at": {"type": "string"}, "scope": {"type": "string", "enum": ["here", "person", "owner"]}, "who": {"type": "string", "description": "For scope 'person': their name. Defaults to whoever is speaking."}, "repeat_every_minutes": {"type": "number", "minimum": 5}}, "required": ["about"], "additionalProperties": False},
         "annotations": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False},
     },
@@ -104,6 +104,51 @@ TOOLS: list[dict[str, Any]] = [
 MIND_INSTRUCTIONS = "Your own notebook, journal, people and follow-ups. Results are already limited to what the current audience may know."
 
 
+_MIND_TOOLS = {tool["name"] for tool in TOOLS}
+_MIND_PARAMS = {tool["name"]: set((tool.get("inputSchema") or {}).get("properties") or {}) for tool in TOOLS}
+#: A whole tool identifier and nothing after it, except an argument list in brackets
+#: (one runtime titles a call `mind_note(subject: ...)`). A title is display text and
+#: can contain what the model wrote, so a title that merely starts with a tool name is
+#: not enough: `mind_note; curl ...` is a shell command.
+_TOOL_TITLE = re.compile(r"(?:mcp__(?P<a>[A-Za-z0-9-]+)__|(?P<b>[A-Za-z0-9-]+)[./:])?(?P<tool>mind_[a-z_]+)(?P<args>\(.*\))?", re.S)
+#: What kind of action a runtime says a call is. Its harness sets this, not the model.
+#: An MCP tool is "other" (or unlabelled); a shell command, an edit or a fetch never is.
+_MCP_KINDS = (None, "", "other")
+
+
+def _own_tool(call: dict[str, Any], meta: dict[str, Any] | None = None) -> str | None:
+    """Which mind tool a permission request is for, or None.
+
+    The answer decides an automatic approval, so it must not rest on text the model
+    controls. Two shapes are accepted:
+
+    - The native runtime's envelope, `rawInput == {server, tool, arguments}`, exactly.
+      A different tool cannot carry its own required arguments inside those three keys.
+    - A runtime that sends only a title: the title must be the whole identifier of a
+      mind tool, the call's kind must be the one harnesses give MCP tools, the raw
+      arguments (when present) must all be parameters of that tool, and the harness's
+      own tool name (when it supplies one) must agree.
+    """
+    raw = call.get("rawInput")
+    if isinstance(raw, dict) and set(raw) == {"server", "tool", "arguments"}:
+        ok = raw["server"] == MIND_SERVER and raw["tool"] in _MIND_TOOLS and isinstance(raw["arguments"], dict)
+        return raw["tool"] if ok else None
+    if call.get("kind") not in _MCP_KINDS:
+        return None
+    match = _TOOL_TITLE.fullmatch(str(call.get("title") or "").strip())
+    if not match or match.group("tool") not in _MIND_TOOLS or (match.group("a") or match.group("b")) not in (None, MIND_SERVER):
+        return None
+    tool = match.group("tool")
+    if match.group("args") and call.get("kind") != "other":
+        return None  # the `name(arguments)` form is only trusted from a harness that labels the call
+    if raw is not None and not (isinstance(raw, dict) and set(raw) <= _MIND_PARAMS[tool]):
+        return None
+    harness = ((meta or {}).get("claudeCode") or {}) if isinstance(meta, dict) else {}
+    if isinstance(harness, dict) and harness.get("toolName") not in (None, tool, f"mcp__{MIND_SERVER}__{tool}"):
+        return None
+    return tool
+
+
 def spoken(text: str) -> str:
     """What was actually said aloud, given the participation conventions experiences use."""
     text = _FOLLOW_UP_LINE.sub("", text or "").strip()
@@ -117,6 +162,15 @@ def spoken(text: str) -> str:
         if isinstance(value, dict):
             return str(value.get("text") or "") if value.get("decision") == "speak" else ""
     return text
+
+
+#: Said in the brief when an engine has not opened the mind's tools. Without it a model
+#: asked to remember something goes looking for a notebook in files, the shell and the web.
+TOOLS_MISSING = (
+    "Your notebook, people and follow-up tools are not connected in this conversation, so you cannot save a note or schedule "
+    "anything from here. If you are asked to remember something or to come back to it, say plainly that you cannot do that from "
+    "this conversation right now. Do not look for a notebook in files, the shell or the web."
+)
 
 
 class Turn:
@@ -165,6 +219,10 @@ class Mind:
         self.memory: Memory = daemon.memory
         self.decider: decisions.Decider = daemon.decider
         self.tokens: dict[str, str] = {}
+        self.used_tokens: set[str] = set()
+        self.quiet_hops: dict[str, int] = {}
+        self.tools_ok: set[str] = set()
+        self.tools_warned: set[str] = set()
         self.scenes: dict[str, Scene] = {}
         self.servers: dict[str, list[dict[str, Any]]] = {}
         self.options: dict[str, list[dict[str, Any]]] = {}
@@ -172,6 +230,7 @@ class Mind:
         self.replaying: set[str] = set()
         self.replay = brief.ReplayFilter()
         self.home = Home(self)
+        self.bridge = bridges.load(self.config)
         self._http: aiohttp.ClientSession | None = None
         self._task_lock = asyncio.Lock()
 
@@ -192,6 +251,8 @@ class Mind:
                 "headers": [{"name": "Authorization", "value": f"Bearer {token}"}]}
 
     def supports_http_mcp(self, runtime: RuntimeProc) -> bool:
+        if not runtime.spec.mind_tools:
+            return False
         caps = ((runtime.initialize_result or {}).get("agentCapabilities") or {}).get("mcpCapabilities") or {}
         return caps.get("http") is True
 
@@ -223,6 +284,8 @@ class Mind:
             if isinstance(result, dict) and isinstance(result.get("configOptions"), list):
                 self.options[sid] = result["configOptions"]
             self.store.session_touch(sid, runtime=link.runtime.spec.name)
+            if token in self.used_tokens:
+                self._tools_opened(sid)
         return result
 
     def link_closed(self, link: Any) -> None:
@@ -234,12 +297,39 @@ class Mind:
         def drop() -> None:
             for token in dead:
                 self.tokens.pop(token, None)
+                self.used_tokens.discard(token)
 
         # A tool call can still be in flight when a client hangs up; keep its token briefly.
         asyncio.get_running_loop().call_later(120, drop)
 
     def valid_token(self, token: str) -> bool:
-        return token in self.tokens
+        """Called for every request to the mind's tool server. A valid request is also
+        the evidence that this session's runtime actually opened the tools."""
+        if token not in self.tokens:
+            return False
+        self.used_tokens.add(token)
+        if self.tokens[token]:
+            self._tools_opened(self.tokens[token])
+        return True
+
+    def _tools_opened(self, sid: str) -> None:
+        if sid not in self.tools_ok:
+            self.tools_ok.add(sid)
+            self.store.session_touch(sid, tools_seen=now())
+
+    def _tools_missing(self, sid: str, runtime: RuntimeProc | None = None) -> bool:
+        """True when this session's runtime will not have the mind tools: it was never
+        offered them (no HTTP MCP, or configured without), or it has completed a turn
+        without opening them. A working runtime lists tools before its first reply."""
+        if runtime is not None and not self.supports_http_mcp(runtime):
+            return True
+        if sid in self.tools_ok:
+            return False
+        row = self.store.session(sid)
+        if row and row["tools_seen"]:
+            self.tools_ok.add(sid)
+            return False
+        return bool(row and (row["turns"] or 0) >= 1)
 
     # ---- observing the stream ------------------------------------------------------
     def observe_update(self, link: Any, params: dict[str, Any]) -> dict[str, Any] | None:
@@ -271,8 +361,8 @@ class Mind:
     def own_permission(self, params: dict[str, Any]) -> dict[str, Any] | None:
         """Approve the runtime's request to call one of the mind's own tools. Those
         only touch Vigil's memory; everything else goes to the client to decide."""
-        raw = (params.get("toolCall") or {}).get("rawInput")
-        if not isinstance(raw, dict) or raw.get("server") != MIND_SERVER:
+        call = params.get("toolCall") or {}
+        if not isinstance(call, dict) or _own_tool(call, params.get("_meta") or call.get("_meta")) is None:
             return None
         options = params.get("options") or []
         chosen = next((o for o in options if o.get("kind") == "allow_once"), None) or next((o for o in options if str(o.get("kind", "")).startswith("allow")), None)
@@ -290,9 +380,10 @@ class Mind:
         scene = self.scenes.get(sid)
         if scene is None:
             return
-        texts = [b.get("text", "") for b in params.get("prompt") or [] if isinstance(b, dict) and b.get("type") == "text"]
-        if texts:
-            scene.heard = (scene.heard + "\n" + "\n".join(texts))[-6000:]
+        added = surfaces.steering_heard(params.get("prompt") or [])
+        if added:
+            # Keep the newest words when a long turn collects many updates.
+            scene.heard = (scene.heard + "\n" + added)[-4000:]
 
     # ---- a turn --------------------------------------------------------------------
     async def prompt(self, link: Any, params: dict[str, Any]) -> Any:
@@ -306,10 +397,13 @@ class Mind:
         scene = surfaces.read(sid, blocks, meta)
         self.memory.settle(scene)
         self._label(scene)
+        self.memory.overhear(scene)
         self.scenes[sid] = scene
         turn = self.turns[sid] = Turn()
         event = self.store.event_begin("prompt", sid, scene.place, {"surface": scene.surface, "mode": scene.mode, "audience": scene.audience})
         try:
+            if scene.wake:
+                self.store.meta_set(f"wake:{scene.place}", "0")
             if scene.mode == "continuation" and scene.wake and not self.memory.thoughts_due(scene):
                 # Our own wake-up, and nothing is ready: answer it without a model call.
                 await self._arm_wake(sid, scene, None)
@@ -317,11 +411,21 @@ class Mind:
                 return {"stopReason": "end_turn", "_meta": {VIGIL_META: {"wake": "quiet"}}}
 
             extras: dict[str, Any] = {"instructions": self._standing_instructions(scene)}
+            if scene.surface == "companion" and self.bridge and self.bridge.voice and scene.heard:
+                routed = await self._voice_to_game(link, sid, scene, meta, extras)
+                if routed is not None:
+                    self.store.event_finish(event, "done", {"routed": "minecraft"})
+                    return routed
             effort, recall = await self._triage(scene)
             if recall and scene.heard:
                 extras["recall"] = self.memory.search(scene, scene.heard, 4)
             if scene.wake:
                 extras["lines"] = ["This turn exists because something you were holding is due. Deliver it now."]
+            if self._tools_missing(sid, link.runtime):
+                extras.setdefault("lines", []).append(TOOLS_MISSING)
+                if sid not in self.tools_warned:
+                    self.tools_warned.add(sid)
+                    log.warning("session %s: runtime %s never opened the mind tools; the agent has no notebook or follow-ups there", sid, link.runtime.spec.name)
             text, surfaced = brief.compose(scene, self.memory, self.config, extras)
             params["prompt"] = blocks + [brief.block(text)]
             if effort:
@@ -352,6 +456,35 @@ class Mind:
             raise
         finally:
             self.turns.pop(sid, None)
+
+    _GAME_WORDS = re.compile(r"\b(mine(craft)?|block|build|craft|dig|chest|creeper|follow me|come (here|over|to me)|bring me|pickaxe|sword|torch|village|cave|farm|wood|stone|iron|diamond|inventory|hut|base|portal)\b", re.I)
+
+    async def _voice_to_game(self, link: Any, sid: str, scene: Scene, meta: dict[str, Any], extras: dict[str, Any]) -> dict[str, Any] | None:
+        """A spoken remark about the game goes straight to the agent's presence in the
+        game, and that presence's reply is the spoken answer. Returns None to let the
+        call session handle the turn in the ordinary way."""
+        said = scene.heard.strip()
+        if self.decider.available:
+            answers = await self.decider.ask("voice_route", {"caller_said": said[-800:]}, [decisions.GAME_TALK], timeout=2.0)
+            verdict = answers.get("route") if answers else None
+            game = bool(verdict and not verdict.refused and verdict.value == "game" and verdict.confidence >= 0.65) if answers else bool(self._GAME_WORDS.search(said))
+        else:
+            game = bool(self._GAME_WORDS.search(said))
+        if not game:
+            return None
+        call = str(((meta.get(surfaces.CONVERSATIONS_META) or {}).get("conversationId")) or sid)
+        actor = scene.actor.handle if scene.actor else "caller"
+        result = await self.bridge.ask(self.http, said, actor, self.memory.name_of(scene.actor_person), call)
+        if result["state"] == "replied":
+            await link.front.send_notification("session/update", {"sessionId": sid, "update": {
+                "sessionUpdate": "agent_message_chunk", "messageId": secrets.token_hex(8), "content": {"type": "text", "text": result["text"]}}})
+            self.memory.journal_add(scene, result["text"], f"passed to {self.bridge.label}", "end_turn")
+            return {"stopReason": "end_turn", "_meta": {VIGIL_META: {"routed": "minecraft"}}}
+        if result["state"] == "working":
+            extras.setdefault("lines", []).append(
+                f"You already passed the caller's words to your own presence in {self.bridge.label}, and it is acting on them now. It has not replied yet. "
+                "Tell the caller in a few words that you are on it. Do not send the request again.")
+        return None
 
     def _label(self, scene: Scene) -> None:
         """Replace generic place labels with the names the owner configured."""
@@ -420,8 +553,13 @@ class Mind:
 
     # ---- coming back ---------------------------------------------------------------
     def _next_wake(self, scene: Scene) -> float | None:
+        """Seconds until something a wake-up in this conversation could deliver. Only a
+        thought held for this place counts: one that follows a person is delivered when
+        that person speaks, and a wake-up with nobody speaking cannot deliver it."""
         soonest: float | None = None
         for thought in self.memory.thoughts_pending(scene.place):
+            if thought["scope"] != "here":
+                continue
             wait = max(0.0, thought["due"] - now())
             soonest = wait if soonest is None else min(soonest, wait)
         running = self.store.one("SELECT count(*) AS n FROM tasks WHERE place=? AND state IN ('queued','running')", (scene.place,))
@@ -440,11 +578,34 @@ class Mind:
         server = next((s for s in self.servers.get(sid) or [] if str(s.get("name", "")).startswith("slack") and s.get("url")), None)
         wait = self._next_wake(scene)
         if server is None or wait is None or wait > float(self.config.mind("followup_chain_horizon_hours", 24)) * 3600:
+            self.quiet_hops.pop(scene.place, None)
             return
         after = int(min(3600, max(5, wait + 2)))
+        if turn is None:
+            # A wake-up that found nothing to deliver. It should only happen on the way
+            # to something due later; never let it turn into a tight loop.
+            hops = self.quiet_hops.get(scene.place, 0) + 1
+            self.quiet_hops[scene.place] = hops
+            after = max(after, 30)
+            if hops > 40:
+                log.warning("wake chain for %s stopped after %d quiet hops with nothing delivered", scene.place, hops)
+                return
+        else:
+            self.quiet_hops.pop(scene.place, None)
+        # One wake-up per place is enough. Every turn ends here, and without this each
+        # one schedules its own, so they all fire together when the thought comes due.
+        fire_at = now() + after
+        key = f"wake:{scene.place}"
+        try:
+            armed = float(self.store.meta_get(key) or 0)
+        except ValueError:
+            armed = 0.0
+        if now() < armed <= fire_at + 5:
+            return
         goal = f"[vigil:wake:{secrets.token_hex(5)}] Return to this conversation when something you are holding for it is due. Stay quiet if nothing is ready."
         try:
             await call_tool(self.http, server, "slack_follow_up", {"after_seconds": after, "goal": goal}, timeout=5.0)
+            self.store.meta_set(key, str(fire_at))
         except Exception as error:
             log.info("wake not armed for %s: %s", scene.place, error)
 
@@ -464,7 +625,8 @@ class Mind:
                 if hit["kind"] == "note":
                     lines.append(f"note #{hit['id']} [{hit['subject']}] ({brief.ago(hit['ts'])}): {hit['text']}")
                 else:
-                    lines.append(f"journal, {brief.ago(hit['ts'])}, {hit['where']}: {hit['who'] or 'someone'} said \"{hit['heard']}\" / you said \"{hit['said']}\"")
+                    origin = f" (another shared space; {hit['with']} was there, others here may not have seen it)" if hit.get("elsewhere") and scene.audience != "owner" else ""
+                    lines.append(f"journal, {brief.ago(hit['ts'])}, {hit['where']}{origin}: {hit['who'] or 'someone'} said \"{hit['heard']}\" / you said \"{hit['said']}\"")
             return "\n".join(lines)
         if name == "mind_note":
             subject, text = str(args.get("subject") or "").strip(), str(args.get("note") or "").strip()
@@ -535,7 +697,7 @@ class Mind:
         lines = []
         for person_id in ids:
             who = memory.person(person_id)
-            if not who:
+            if not who or not memory.known_here(scene, who):
                 continue
             kind = "your owner" if who["is_owner"] else ("an agent" if who["is_agent"] else "a person")
             if scene.audience == "owner":
@@ -634,12 +796,14 @@ class Mind:
     async def dream(self) -> dict[str, Any]:
         """Consolidate recent journal entries into notes. A decision model first picks
         the entries worth the main model's attention, in one batched request."""
-        rows = self.store.q("SELECT * FROM journal WHERE consolidated=0 AND ts>? AND (heard!='' OR said!='') ORDER BY ts LIMIT 96", (now() - 3 * 86400,))
+        rows = self.store.q("SELECT * FROM journal WHERE consolidated=0 AND COALESCE(mode,'')!='overheard' AND ts>? AND (heard!='' OR said!='') ORDER BY ts LIMIT 96", (now() - 3 * 86400,))
         if not rows:
             return {"entries": 0, "kept": 0}
         kept = []
-        for start in range(0, len(rows), 24):
-            chunk = rows[start:start + 24]
+        # Practice stays in practice: nothing from a rehearsal place becomes a lasting note.
+        scored = [r for r in rows if not self.memory.is_rehearsal(r["place"])]
+        for start in range(0, len(scored), 24):
+            chunk = scored[start:start + 24]
             state = {"entries": [{"index": i, "who": r["actor_name"], "heard": clip(r["heard"], 260), "agent_said": clip(r["said"], 260)} for i, r in enumerate(chunk)]}
             answers = await self.decider.ask("salience", state, decisions.salience_questions(len(chunk)), timeout=8.0) if self.decider.available else None
             for i, row in enumerate(chunk):

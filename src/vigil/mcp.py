@@ -9,6 +9,8 @@ bearer token ties each call to one session, and through it to that session's aud
 from __future__ import annotations
 
 import json
+import logging
+import os
 from typing import Any
 from collections.abc import Awaitable, Callable
 
@@ -16,6 +18,9 @@ import aiohttp
 from aiohttp import web
 
 from . import __version__
+
+log = logging.getLogger("vigil.mcp")
+TRACE = os.environ.get("VIGIL_TRACE", "") not in ("", "0")
 
 PROTOCOLS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 
@@ -44,18 +49,24 @@ class McpServer:
         return [web.post("/mcp", self.handle), web.get("/mcp", self.no_stream), web.delete("/mcp", self.no_stream)]
 
     async def no_stream(self, request: web.Request) -> web.Response:
+        if TRACE:
+            log.info("trace mcp %s /mcp -> 405", request.method)
         return web.Response(status=405, headers={"Allow": "POST"})
 
     async def handle(self, request: web.Request) -> web.Response:
         header = request.headers.get("Authorization", "")
         token = header[7:].strip() if header.lower().startswith("bearer ") else ""
         if not token or not self.authorize(token):
+            if TRACE:
+                log.info("trace mcp POST /mcp -> 401 (%s)", "no bearer token" if not token else "unknown token")
             return web.json_response(_rpc(None, error=(-32001, "Unknown or expired session token")), status=401)
         try:
             body = await request.json()
         except (ValueError, aiohttp.ContentTypeError):
             return web.json_response(_rpc(None, error=(-32700, "Parse error")), status=400)
         batch = body if isinstance(body, list) else [body]
+        if TRACE:
+            log.info("trace mcp POST /mcp %s", [f"{m.get('method')}:{(m.get('params') or {}).get('name', '')}" if isinstance(m, dict) else "?" for m in batch])
         replies = [reply for message in batch if (reply := await self._one(token, message)) is not None]
         if not replies:
             return web.Response(status=202)

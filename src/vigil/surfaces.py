@@ -58,6 +58,15 @@ class Scene:
     identity_name: str | None = None
     self_handle: str | None = None
     wake: str | None = None
+    #: The source's own id for the message that started this turn, when it has one.
+    source_id: str | None = None
+    #: Other messages the experience showed with this turn that the agent did not take
+    #: part in: (source id, who, text, source time or 0). Memory keeps them, so a room's
+    #: history is the same from every place the agent later looks from.
+    overheard: list[tuple[str, Who, str, float]] = field(default_factory=list)
+    #: How much of the recent conversation is the agent's own: (its messages, messages
+    #: counted, messages since it last spoke or None).
+    share: tuple[int, int, int | None] | None = None
     #: Filled in by the mind once identities are resolved to people.
     actor_person: str | None = None
     people: dict[str, str] = field(default_factory=dict)
@@ -144,6 +153,24 @@ def _slack(scene: Scene, text: str) -> bool:
     if sender and sender != scene.self_handle:
         scene.actor = Who(namespace, sender, names.get(sender, ""), bool(trigger.get("bot")))
     scene.heard = str(trigger.get("text") or "")
+    prefix = f"{namespace}:{channel}:"
+    if trigger.get("ts"):
+        scene.source_id = prefix + str(trigger["ts"])
+    for message in (data.get("history") or [])[-60:]:
+        if not isinstance(message, dict) or message.get("deleted") or not message.get("ts") or not str(message.get("text") or "").strip():
+            continue
+        who = str(message.get("sender") or "")
+        if not who or who == scene.self_handle or prefix + str(message["ts"]) == scene.source_id:
+            continue
+        try:
+            at = float(message["ts"])
+        except (TypeError, ValueError):
+            at = 0.0
+        scene.overheard.append((prefix + str(message["ts"]), Who(namespace, who, names.get(who, ""), bool(message.get("bot"))), str(message["text"])[:4000], at))
+    recent = [m for m in (data.get("history") or [])[-12:] if isinstance(m, dict) and not m.get("deleted")]
+    if scene.self_handle and len(recent) >= 4:
+        mine = [i for i, m in enumerate(recent) if m.get("sender") == scene.self_handle]
+        scene.share = (len(mine), len(recent), (len(recent) - 1 - mine[-1]) if mine else None)
     kind = ((data.get("orientation") or {}).get("conversation_kind") or "").lower()
     if channel.startswith("D") or kind == "direct":
         scene.audience = "dm"
@@ -244,13 +271,64 @@ def _minecraft(scene: Scene, texts: list[str]) -> bool:
         if name and source in ("human", "agent"):
             scene.actor = Who(namespace, name, name, source == "agent")
         scene.heard = str(last.get("message") or "")
+        if last.get("id"):
+            scene.source_id = f"minecraft:{last['id']}"
+        for message in messages[:-1][-40:]:
+            who, text = str(message.get("username") or ""), str(message.get("message") or "")
+            if not message.get("id") or not who or who == scene.self_handle or not text.strip() or message.get("whisper"):
+                continue
+            if str(message.get("source") or "human") not in ("human", "agent"):
+                continue
+            scene.overheard.append((f"minecraft:{message['id']}", Who(namespace, who, who, message.get("source") == "agent"), text[:4000], 0.0))
         if all(m.get("whisper") for m in messages):
             scene.audience = "dm"
+        origin = last.get("installation_source")
+        if isinstance(origin, dict):
+            # Not game chat: another experience (a voice call, typically) passed a
+            # person's words to this player privately, and the reply returns there.
+            who = origin.get("actor") or {}
+            scene.actor = Who("conversations", str(who.get("id") or "caller"), str(who.get("label") or ""))
+            scene.participants = [scene.actor]
+            scene.audience = "dm"
+            if "voice" in str((origin.get("audience") or {}).get("experience") or ""):
+                scene.mode = "voice"
         if source in ("activity", "continuation"):
             scene.mode = "ambient" if source == "activity" else "continuation"
     if world.get("ambient_activity") or world.get("peer_proposal"):
         scene.mode = "ambient"
     return True
+
+
+def steering_heard(blocks: list[Any]) -> str:
+    """What people said in input that arrives while a turn is running.
+
+    Experiences wrap that input the way they wrap a prompt: an Instance reference
+    block, a line of guidance, then the facts as JSON. Memory should keep the words,
+    one line per speaker, and none of the wrapping. Never raises."""
+    lines: list[str] = []
+    for block in blocks or []:
+        try:
+            if not isinstance(block, dict) or block.get("type") != "text":
+                continue
+            text = str(block.get("text") or "")
+            if not text.strip() or _is_instance_block(block, text) or text.startswith("[Original input reference]"):
+                continue
+            probe = Scene(session="")
+            if _slack(probe, text) and probe.heard:
+                lines.append(f"{probe.actor.name}: {probe.heard}" if probe.actor and probe.actor.name else probe.heard)
+                continue
+            at = text.find("\n{")
+            data = _json_tail(text, at + 1) if at >= 0 else None
+            messages = data.get("messages") if isinstance(data, dict) else None
+            if isinstance(messages, list):
+                for message in messages:
+                    if isinstance(message, dict) and message.get("message"):
+                        lines.append(f'{message.get("username") or "someone"}: {message["message"]}')
+                continue
+            lines.append(text.strip()[:1500])
+        except Exception:  # a reader must never break a turn
+            continue
+    return "\n".join(lines)
 
 
 def read(session: str, blocks: list[dict[str, Any]], meta: dict[str, Any] | None = None) -> Scene:

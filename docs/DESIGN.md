@@ -48,19 +48,23 @@ It tells the model that it is the agent's own working memory, that nobody in the
 
 ## Audiences
 
-The rule: **a memory is shown only to an audience that could already have known it.** Identity is continuous; audiences are not merged. This is the family's composition agreement applied to memory.
+The agent remembers the way a colleague on several teams does. Identity is continuous; what may surface in a scene depends on where a memory came from and who is present now.
 
 Evidence for the audience comes from two places. The strongest is the binding an Instance verifies with the source provider and places in its conversation orientation (`owner`, provider, conversation, actor). The fallback is what the experience's prompt says: a Slack channel id beginning with `D`, a Conversations room with one person, a Minecraft whisper.
 
-| The scene is | It may read |
+| Where a memory came from | Where it may surface |
 | --- | --- |
-| Owner-private | Everything, except private exchanges between the agent and someone other than the owner. |
-| A group, or a private conversation with someone else | Its own place. Notes marked `anywhere`. One-line hints about other *group* places where the person now speaking was also present, if their accounts are linked. |
-| Unverified | Treated as a group, without the hints. |
+| A private exchange with one person (direct message, whisper, call) | Only with that person, in private. The owner does not see other people's private exchanges. |
+| A shared space (a channel, a room, the game world) | That space; any owner-private scene; and any other scene where someone present was part of it. |
+| A note the agent marked `anywhere` | Anywhere. |
 
-Notes carry a visibility the agent chooses when it writes them: `here` (the default), `anywhere` (for things a person would be comfortable having known in any room), or `owner`. Tool results are filtered by the same rule, so the model cannot retrieve what the brief would not have shown.
+The third column of the middle row is the important one. If Maya is in two channels, what was decided in the first can surface in the second even when someone else there asks, because Maya could have said it herself. With nobody in common, nothing crosses. Whether to *say* it is then the agent's judgment, and the standing guidance tells it to mention where something came from and to ask before repeating something from a small room in a much larger one. Tool results obey the same rule, so the model cannot retrieve what the brief would not have shown.
 
-Hints are deliberately thin. In a Minecraft session the agent learns that it and this player spoke in a Slack channel yesterday, with a few words of what the player said, and is told to ask before carrying detail across. That is how a colleague behaves, and it leaves the decision to bring something into a wider room with a person.
+Places the owner marks as rehearsal (`mind.rehearsal_places`) sit outside this table. Without that mark, a test workspace leaks into real work through the one person who is in both: the owner. With it, what was learned in a rehearsal place surfaces only in rehearsal places, a follow-up promised there is delivered there, nothing from it is consolidated, and only the owner, asking in private, can look it up.
+
+`mind.cross_space` selects the policy: `overlap` (above, the default), `hints` (other shared spaces appear only as one-line reminders for the person speaking), or `strict` (nothing crosses between places).
+
+In a scripted day across two channels, a thread, direct messages, a game world and a voice call (`tests/etiquette/journey.py`), the agent carried a decision to the sub-team that needed it, recognised a linked teammate in the game, turned away a stranger, and kept a confidence when its owner asked directly.
 
 ## People
 
@@ -86,6 +90,10 @@ A typed decision model takes some state and a set of closed questions and return
 | Is the goal met, is work left, or is it blocked? | After an unattended run ends a turn | Continues the run, at most twice. |
 
 Every decision is logged with its probabilities and latency (`vigil memory decisions`), which is the raw material for tuning thresholds. Each caller has a rule-based default, and a backend that fails is skipped for a minute, so an outage costs one timeout rather than one per turn. Group-chat admission ("should I speak?") is not here: an Instance already owns that with its attention profile, and running a second social gate would break the family's agreement.
+
+## Voice and the game
+
+A person on a Companion call who is also in the game with the agent wants it to react, not to relay. By default a spoken request would be reasoned about in the call session, handed to the game session through tools, reasoned about again there, and reported back. With a bridge configured, the mind asks a decision model one question about each spoken remark: is this about the game? If so, the caller's exact words go to the agent's own player through the adapter's interface for outside callers, attributed to the caller, and the player's reply is returned as the spoken answer. The call session's model does not run. The game session sees that the request came from a voice call and keeps its reply short. Measured on a live world: about 3 to 8 seconds from words to answer, with the routing decision taking under 100 ms.
 
 ## Background work and consolidation
 
@@ -113,5 +121,5 @@ Other guidance is applied in the harness instead of in text: effort is set throu
 
 - It reads no other component's files and uses no other component's credentials. It calls an experience's tool only through the descriptor that experience handed to the session.
 - It advertises only what the runtime negotiated, plus its own identity. It removes the native history profile, because an Instance uses that to run the engine binary against its store, and Vigil is not that binary.
-- It approves permission requests only for its own tools. Everything else goes to the client, so each experience's approval policy stands.
+- It approves permission requests only for its own tools. Everything else goes to the client, so each experience's approval policy stands. Because that approval is automatic, it never rests on text a model controls: Vigil accepts the native runtime's exact `{server, tool, arguments}` envelope, or a request whose title is the whole identifier of a mind tool, whose kind is the one harnesses give MCP tools, and whose raw arguments are all parameters of that tool. A shell command that begins with a tool's name, or another tool that carries `server: "mind"` among its arguments, is passed to the client like anything else.
 - It adds no social gate of its own in front of prompts an Instance has admitted.

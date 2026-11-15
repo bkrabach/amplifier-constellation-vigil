@@ -97,7 +97,7 @@ WorkingDirectory=$VIGIL_HOME
 ExecStart="$VIGIL" --home "$VIGIL_HOME" serve
 Restart=always
 RestartSec=3
-TimeoutStopSec=20
+TimeoutStopSec=75
 KillMode=control-group
 UMask=0077
 
