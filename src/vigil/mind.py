@@ -71,7 +71,7 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "mind_follow_up",
-        "description": "Hold a thought to return to later. Give 'in_minutes' or an ISO 'at' time. Scope 'here' brings it back in this conversation, 'person' the next time you talk with that person in a suitable place, 'owner' the next time you talk privately with your owner. Leave scope out to let your core choose the one most likely to reach them. Use it whenever you promise to check, remind or get back to someone.",
+        "description": "Hold a thought to return to later. Give 'in_minutes' or an ISO 'at' time. Scope 'here' brings it back in this conversation, 'person' the next time you talk with that person in a suitable place (give 'who' when it is someone other than the speaker, or when it belongs in another place), 'owner' the next time you talk privately with your owner. Leave scope out to let your core choose the one most likely to reach them. Use it whenever you promise to check, remind or get back to someone.",
         "inputSchema": {"type": "object", "properties": {"about": {"type": "string", "description": "What to bring up, written so it makes sense later without this conversation."}, "in_minutes": {"type": "number", "minimum": 0}, "at": {"type": "string"}, "scope": {"type": "string", "enum": ["here", "person", "owner"]}, "who": {"type": "string", "description": "For scope 'person': their name. Defaults to whoever is speaking."}, "repeat_every_minutes": {"type": "number", "minimum": 5}}, "required": ["about"], "additionalProperties": False},
         "annotations": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False},
     },
