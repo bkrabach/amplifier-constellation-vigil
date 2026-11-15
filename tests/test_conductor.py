@@ -17,7 +17,7 @@ from vigil.daemon import Daemon
 HERE = Path(__file__).parent
 
 
-def make_home(tmp_path: Path, port: int) -> Config:
+def make_home(tmp_path: Path, port: int, extra: str = "") -> Config:
     home = tmp_path / "home"
     home.mkdir()
     (home / "vigil.toml").write_text(f"""
@@ -40,7 +40,7 @@ command = ["{sys.executable}", "{HERE / 'fake_runtime.py'}"]
 FAKE_RUNTIME_STATE = "{home}/fake-state.json"
 [mind]
 dream_at = "off"
-""")
+""" + extra)
     return Config.load(home)
 
 
@@ -79,9 +79,9 @@ class Client:
 
 @pytest.fixture
 def run(tmp_path, unused_tcp_port_factory=None):
-    def runner(scenario, port=47930):
+    def runner(scenario, port=47930, extra=""):
         async def body():
-            config = make_home(tmp_path, port)
+            config = make_home(tmp_path, port, extra)
             daemon = Daemon(config)
             task = asyncio.create_task(daemon.run())
             for _ in range(100):
@@ -208,3 +208,55 @@ def test_quiet_wake_costs_no_model_call(run):
         assert daemon.store.one("SELECT state FROM thoughts")["state"] == "delivered"
         await client.close()
     run(scenario)
+
+
+def test_spoken_game_request_goes_straight_to_the_game(run):
+    """A voice remark about the game is answered by the agent's presence in the game:
+    its body receives the caller's exact words, and the call session's model never runs."""
+    from aiohttp import web
+
+    seen: dict = {}
+
+    async def task(request):
+        seen["task"] = await request.json()
+        seen["auth"] = request.headers.get("Authorization")
+        return web.json_response({"queued": True, "request_id": "q1", "source_request_id": seen["task"]["source"]["request_id"]})
+
+    async def outcomes(request):
+        seen["query"] = await request.json()
+        return web.json_response({"version": 1, "outcomes": [{"delivery": "admitted", "source_replies": [{"id": "r1", "text": "Coming over with the torches now."}]}]})
+
+    async def scenario(config, daemon):
+        config.write_secret("mc-caller", "t" * 40)
+        app = web.Application()
+        app.add_routes([web.post("/task", task), web.post("/source-outcomes", outcomes)])
+        runner = web.AppRunner(app)
+        await runner.setup()
+        await web.TCPSite(runner, "127.0.0.1", 47931).start()
+        try:
+            client = Client()
+            await client.attach(config)
+            sid = (await client.conn.send_request("session/new", {"cwd": config.workspace, "mcpServers": []}))["sessionId"]
+            call = ("The live voice conversation delegated help at 900ms. You are the same agent.\n\nThis new request's delegation_id is d1.\n\n"
+                    "Current human source (exact):\ncan you bring me some torches, I am down in the cave\n\nRecent conversation, for references: none")
+            meta = {"com.microsoft.amplifier.conversations": {"conversationId": "call-1", "author": "olive", "messageId": "m"}}
+            result = await client.conn.send_request("session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": call}], "_meta": meta})
+            assert result == {"stopReason": "end_turn", "_meta": {"dev.vigil": {"routed": "minecraft"}}}
+            assert client.text() == "Coming over with the torches now."
+            assert seen["task"]["text"] == "can you bring me some torches, I am down in the cave"  # the caller's words, unchanged
+            assert seen["task"]["source"]["actor"] == {"id": "olive", "label": "Olive"} and seen["auth"] == "Bearer " + "t" * 40
+            assert json.loads((config.home / "fake-state.json").read_text())[sid]["prompts"] == []
+            # a remark that is not about the game takes the ordinary path
+            other = call.replace("can you bring me some torches, I am down in the cave", "what is on my calendar tomorrow")
+            await client.conn.send_request("session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": other}], "_meta": meta})
+            assert len(json.loads((config.home / "fake-state.json").read_text())[sid]["prompts"]) == 1
+            await client.close()
+        finally:
+            await runner.cleanup()
+
+    run(scenario, extra='''
+[bridges.minecraft]
+url = "http://127.0.0.1:47931"
+secret = "mc-caller"
+wait_seconds = 5
+''')

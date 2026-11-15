@@ -253,6 +253,16 @@ def _minecraft(scene: Scene, texts: list[str]) -> bool:
         scene.heard = str(last.get("message") or "")
         if all(m.get("whisper") for m in messages):
             scene.audience = "dm"
+        origin = last.get("installation_source")
+        if isinstance(origin, dict):
+            # Not game chat: another experience (a voice call, typically) passed a
+            # person's words to this player privately, and the reply returns there.
+            who = origin.get("actor") or {}
+            scene.actor = Who("conversations", str(who.get("id") or "caller"), str(who.get("label") or ""))
+            scene.participants = [scene.actor]
+            scene.audience = "dm"
+            if "voice" in str((origin.get("audience") or {}).get("experience") or ""):
+                scene.mode = "voice"
         if source in ("activity", "continuation"):
             scene.mode = "ambient" if source == "activity" else "continuation"
     if world.get("ambient_activity") or world.get("peer_proposal"):

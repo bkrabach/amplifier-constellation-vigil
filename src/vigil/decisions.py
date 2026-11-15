@@ -246,3 +246,13 @@ FINISHED = choice(
         "blocked": "The agent cannot proceed without a person: it needs a decision, an approval, access, or information only a person has.",
     },
 )
+
+
+GAME_TALK = choice(
+    "route",
+    "The agent is on a voice call and is also a player in a game world right now. Where does the caller's latest remark belong?",
+    {
+        "game": "It is about what is happening in the game world right now, or asks the agent to do, look at, build, fetch, follow or say something there.",
+        "call": "Anything else: work, plans, other places, people, memory, or general conversation.",
+    },
+)

@@ -21,7 +21,7 @@ from typing import Any
 
 import aiohttp
 
-from . import brief, decisions, prompts, surfaces
+from . import bridges, brief, decisions, prompts, surfaces
 from .conductor import VIGIL_META, RuntimeProc
 from .mcp import ToolError, call_tool
 from .memory import Memory, clip
@@ -184,6 +184,7 @@ class Mind:
         self.replaying: set[str] = set()
         self.replay = brief.ReplayFilter()
         self.home = Home(self)
+        self.bridge = bridges.load(self.config)
         self._http: aiohttp.ClientSession | None = None
         self._task_lock = asyncio.Lock()
 
@@ -330,6 +331,11 @@ class Mind:
                 return {"stopReason": "end_turn", "_meta": {VIGIL_META: {"wake": "quiet"}}}
 
             extras: dict[str, Any] = {"instructions": self._standing_instructions(scene)}
+            if scene.surface == "companion" and self.bridge and self.bridge.voice and scene.heard:
+                routed = await self._voice_to_game(link, sid, scene, meta, extras)
+                if routed is not None:
+                    self.store.event_finish(event, "done", {"routed": "minecraft"})
+                    return routed
             effort, recall = await self._triage(scene)
             if recall and scene.heard:
                 extras["recall"] = self.memory.search(scene, scene.heard, 4)
@@ -365,6 +371,35 @@ class Mind:
             raise
         finally:
             self.turns.pop(sid, None)
+
+    _GAME_WORDS = re.compile(r"\b(mine(craft)?|block|build|craft|dig|chest|creeper|follow me|come (here|over|to me)|bring me|pickaxe|sword|torch|village|cave|farm|wood|stone|iron|diamond|inventory|hut|base|portal)\b", re.I)
+
+    async def _voice_to_game(self, link: Any, sid: str, scene: Scene, meta: dict[str, Any], extras: dict[str, Any]) -> dict[str, Any] | None:
+        """A spoken remark about the game goes straight to the agent's presence in the
+        game, and that presence's reply is the spoken answer. Returns None to let the
+        call session handle the turn in the ordinary way."""
+        said = scene.heard.strip()
+        if self.decider.available:
+            answers = await self.decider.ask("voice_route", {"caller_said": said[-800:]}, [decisions.GAME_TALK], timeout=2.0)
+            verdict = answers.get("route") if answers else None
+            game = bool(verdict and not verdict.refused and verdict.value == "game" and verdict.confidence >= 0.65) if answers else bool(self._GAME_WORDS.search(said))
+        else:
+            game = bool(self._GAME_WORDS.search(said))
+        if not game:
+            return None
+        call = str(((meta.get(surfaces.CONVERSATIONS_META) or {}).get("conversationId")) or sid)
+        actor = scene.actor.handle if scene.actor else "caller"
+        result = await self.bridge.ask(self.http, said, actor, self.memory.name_of(scene.actor_person), call)
+        if result["state"] == "replied":
+            await link.front.send_notification("session/update", {"sessionId": sid, "update": {
+                "sessionUpdate": "agent_message_chunk", "messageId": secrets.token_hex(8), "content": {"type": "text", "text": result["text"]}}})
+            self.memory.journal_add(scene, result["text"], f"passed to {self.bridge.label}", "end_turn")
+            return {"stopReason": "end_turn", "_meta": {VIGIL_META: {"routed": "minecraft"}}}
+        if result["state"] == "working":
+            extras.setdefault("lines", []).append(
+                f"You already passed the caller's words to your own presence in {self.bridge.label}, and it is acting on them now. It has not replied yet. "
+                "Tell the caller in a few words that you are on it. Do not send the request again.")
+        return None
 
     def _label(self, scene: Scene) -> None:
         """Replace generic place labels with the names the owner configured."""

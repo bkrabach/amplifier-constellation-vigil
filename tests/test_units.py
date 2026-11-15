@@ -100,6 +100,17 @@ def test_minecraft_scene():
     assert [w.handle for w in scene.participants] == ["Steve42", "Maker"]
 
 
+def test_minecraft_request_from_a_voice_call_is_private_and_spoken():
+    source = {"actor": {"id": "olive", "label": "Olive"}, "audience": {"kind": "private", "experience": "voice-client", "id": "c1"}}
+    world = {"messages": [{"id": 1, "username": "Agent on a voice call", "message": "come find me", "whisper": False, "source": "human",
+                           "reply_scope": "installation:1", "installation_source": source}],
+             "world": {"username": "Polaris", "players": ["Steve42", "Polaris"]}}
+    blocks = [{"type": "text", "text": "Current adapter permission policy for this turn:\n{}"}, {"type": "text", "text": "play.\n" + json.dumps(world)}]
+    scene = surfaces.read("s", blocks)
+    assert (scene.mode, scene.audience) == ("voice", "dm") and scene.actor == Who("conversations", "olive", "Olive")
+    assert [w.handle for w in scene.participants] == ["olive"]  # the reply goes to the caller, not the players nearby
+
+
 # ---- audiences ---------------------------------------------------------------------
 
 def scene_for(memory: Memory, place: str, audience: str, who: Who | None, others: list[Who] | None = None) -> Scene:
