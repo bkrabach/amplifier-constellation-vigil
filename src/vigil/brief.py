@@ -32,7 +32,7 @@ AUDIENCE_TEXT = {
 MODE_TEXT = {
     "ambient": "nobody addressed you directly",
     "continuation": "a continuation of work you already accepted",
-    "voice": "spoken aloud; keep replies short and speakable",
+    "voice": "a live voice call, so your reply is spoken aloud: one to three short sentences, no lists or formatting, and offer more if they want it",
 }
 
 
@@ -100,6 +100,11 @@ def compose(scene: Scene, memory: Memory, config: Config, extras: dict[str, Any]
         lines.append("What you know about people here:")
         lines.extend(people_lines)
 
+    if scene.share and scene.audience not in ("owner", "dm"):
+        mine, counted, since = scene.share
+        if mine:
+            lines.append(f"Of the last {counted} messages here, {mine} {'was' if mine == 1 else 'were'} yours" + (", including the latest one before this." if since == 1 else "."))
+
     last = memory.last_here(scene)
     if last and time.time() - last["ts"] > 1800:
         lines.append(f"You were last active here {ago(last['ts'])}.")
@@ -115,9 +120,12 @@ def compose(scene: Scene, memory: Memory, config: Config, extras: dict[str, Any]
                 tail = f' You: "{said}"' if said else " You stayed quiet."
                 lines.append(f'- {ago(row["ts"])}, {row["place_label"] or row["surface"]}, {who}: "{heard}".{tail}')
         else:
-            lines.append("You and this person have also talked in other shared spaces. Mentioning that is natural; ask before carrying details across:")
+            lines.append("From other shared spaces that people here are also part of. They may not all have seen it, so use a colleague's judgment about what belongs here:")
             for row in elsewhere:
-                lines.append(f'- {ago(row["ts"])}, {row["place_label"] or row["surface"]}: they said "{clip(row["heard"], 90)}"')
+                heard, said = clip(row["heard"], 110), clip(row["said"], 110)
+                there = f" ({row['with']} was there)" if row.get("with") else ""
+                tail = f' You: "{said}"' if said else ""
+                lines.append(f'- {ago(row["ts"])}, {row["place_label"] or row["surface"]}{there}, {row["actor_name"] or "someone"}: "{heard}".{tail}')
 
     due = memory.thoughts_due(scene)
     delivered: list[int] = []

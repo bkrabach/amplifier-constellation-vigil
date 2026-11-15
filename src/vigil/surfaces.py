@@ -58,6 +58,9 @@ class Scene:
     identity_name: str | None = None
     self_handle: str | None = None
     wake: str | None = None
+    #: How much of the recent conversation is the agent's own: (its messages, messages
+    #: counted, messages since it last spoke or None).
+    share: tuple[int, int, int | None] | None = None
     #: Filled in by the mind once identities are resolved to people.
     actor_person: str | None = None
     people: dict[str, str] = field(default_factory=dict)
@@ -144,6 +147,10 @@ def _slack(scene: Scene, text: str) -> bool:
     if sender and sender != scene.self_handle:
         scene.actor = Who(namespace, sender, names.get(sender, ""), bool(trigger.get("bot")))
     scene.heard = str(trigger.get("text") or "")
+    recent = [m for m in (data.get("history") or [])[-12:] if isinstance(m, dict) and not m.get("deleted")]
+    if scene.self_handle and len(recent) >= 4:
+        mine = [i for i, m in enumerate(recent) if m.get("sender") == scene.self_handle]
+        scene.share = (len(mine), len(recent), (len(recent) - 1 - mine[-1]) if mine else None)
     kind = ((data.get("orientation") or {}).get("conversation_kind") or "").lower()
     if channel.startswith("D") or kind == "direct":
         scene.audience = "dm"

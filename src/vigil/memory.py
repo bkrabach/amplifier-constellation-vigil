@@ -1,14 +1,22 @@
 """What the agent carries between conversations: people, notes, a journal of turns,
 and thoughts it is holding for someone.
 
-One rule governs every read: a memory is shown only to an audience that could
-already have known it. The agent is the same individual everywhere, but familiar
-identity does not merge audiences. Concretely:
+The agent remembers the way a colleague on several teams does. What decides whether
+a memory may surface in a scene is where it came from and who is here now:
 
-- An owner-private scene sees everything except other people's private messages.
-- A group or DM scene sees its own place, notes marked "anywhere", and one-line hints
-  about other *shared* places where the person now speaking was also present.
-- A private exchange with someone other than the owner never leaves that place.
+- **Private stays private.** An exchange with one person (a direct message, a
+  whisper, a call) is never shown outside that relationship. The owner's private
+  sessions see the owner's own private material, not other people's.
+- **Shared spaces travel with the people in them.** Something said in a channel or
+  in the game world may surface in another place when someone present here was
+  part of it there. That person could have brought it up themselves, so the agent
+  knowing it is not a leak; whether to say it is the agent's judgment, as it would
+  be a colleague's. With nobody in common, it does not surface.
+- **Owner-private scenes** see every shared space.
+
+`mind.cross_space` selects the policy: "overlap" (the default, described above),
+"hints" (other shared spaces appear only as one-line reminders for the person
+speaking) or "strict" (nothing crosses between places).
 """
 
 from __future__ import annotations
@@ -55,6 +63,42 @@ class Memory:
         columns = {row["name"] for row in self.store.q("PRAGMA table_info(identities)")}
         if "claimed_person" not in columns:
             self.store.run("ALTER TABLE identities ADD COLUMN claimed_person TEXT")
+        if "people" not in {row["name"] for row in self.store.q("PRAGMA table_info(notes)")}:
+            self.store.run("ALTER TABLE notes ADD COLUMN people TEXT")
+
+    # ---- who is here ---------------------------------------------------------------
+    @property
+    def policy(self) -> str:
+        value = self.config.mind("cross_space", "overlap")
+        if self.config.mind("cross_group_hints", True) is False:
+            return "strict"
+        return value if value in ("overlap", "hints", "strict") else "overlap"
+
+    def _present(self, scene: Scene) -> list[str]:
+        """The people in this scene whose presence elsewhere lets a shared memory
+        surface here: everyone for "overlap", only the speaker for "hints"."""
+        if self.policy == "strict":
+            return []
+        ids = [scene.actor_person] if scene.actor_person else []
+        if self.policy == "overlap":
+            ids += list(scene.people.values())
+        return list(dict.fromkeys(i for i in ids if i))[:16]
+
+    def _overlap(self, scene: Scene, column: str = "people") -> tuple[str, list[Any]]:
+        """SQL for "a shared-space row that someone here was part of"."""
+        present = self._present(scene)
+        if not present:
+            return "0", []
+        clause = " OR ".join(f"{column} LIKE ?" for _ in present)
+        return f"(audience='group' AND ({clause}))", [f'%"{person}"%' for person in present]
+
+    def who_was_there(self, scene: Scene, people_json: str | None) -> str:
+        try:
+            there = set(json.loads(people_json or "[]"))
+        except ValueError:
+            return ""
+        names = [self.name_of(p) for p in self._present(scene) if p in there]
+        return ", ".join(names[:3])
 
     # ---- people --------------------------------------------------------------------
     def seed_owner(self) -> None:
@@ -195,8 +239,9 @@ class Memory:
         if subject.lower().startswith("person:"):
             person = self.find_person(subject.split(":", 1)[1])
         note_id = self.store.run(
-            "INSERT INTO notes(ts,subject,text,visibility,place,audience,person,source_session) VALUES(?,?,?,?,?,?,?,?)",
-            (now(), subject.strip()[:120], text.strip()[:4000], visibility, scene.place, scene.audience, person, scene.session),
+            "INSERT INTO notes(ts,subject,text,visibility,place,audience,person,source_session,people) VALUES(?,?,?,?,?,?,?,?,?)",
+            (now(), subject.strip()[:120], text.strip()[:4000], visibility, scene.place, scene.audience, person, scene.session,
+             json.dumps(sorted(set(scene.people.values())))),
         )
         self.store.run("INSERT INTO notes_fts(rowid,subject,text) VALUES(?,?,?)", (note_id, subject, text))
         return note_id
@@ -213,7 +258,8 @@ class Memory:
     def _note_filter(self, scene: Scene) -> tuple[str, list[Any]]:
         if scene.audience == "owner":
             return "archived=0 AND (audience!='dm' OR place=?)", [scene.place]
-        return "archived=0 AND (visibility='anywhere' OR (visibility='here' AND place=?))", [scene.place]
+        shared, args = self._overlap(scene)
+        return f"archived=0 AND (visibility='anywhere' OR (visibility='here' AND (place=? OR {shared})))", [scene.place, *args]
 
     def notes_about(self, scene: Scene, person_id: str, limit: int = 3) -> list[dict[str, Any]]:
         where, args = self._note_filter(scene)
@@ -243,7 +289,10 @@ class Memory:
     def _journal_filter(self, scene: Scene) -> tuple[str, list[Any]]:
         if scene.audience == "owner":
             return "(audience!='dm' OR place=?)", [scene.place]
-        return "place=?", [scene.place]
+        if self.policy != "overlap":
+            return "place=?", [scene.place]
+        shared, args = self._overlap(scene)
+        return f"(place=? OR {shared})", [scene.place, *args]
 
     def last_here(self, scene: Scene) -> dict[str, Any] | None:
         row = self.store.one("SELECT ts, heard, said FROM journal WHERE place=? ORDER BY ts DESC LIMIT 1", (scene.place,))
@@ -259,17 +308,17 @@ class Memory:
                 (scene.place, cutoff, limit),
             )
             return [dict(r) for r in rows]
-        if not scene.actor_person or not self.config.mind("cross_group_hints", True):
+        shared, args = self._overlap(scene)
+        if shared == "0":
             return []
-        person = self.person(scene.actor_person)
-        if not person or person["is_agent"]:
-            return []
+        # With the "hints" policy other places show only what was heard, as a reminder.
+        said = "said" if self.policy == "overlap" else "''"
         rows = self.store.q(
-            "SELECT ts,surface,place_label,actor_name,heard,'' AS said,audience FROM journal "
-            "WHERE place!=? AND audience='group' AND actor=? AND ts>? AND heard!='' ORDER BY ts DESC LIMIT ?",
-            (scene.place, scene.actor_person, cutoff, min(limit, 3)),
+            f"SELECT ts,surface,place_label,actor_name,heard,{said} AS said,audience,people FROM journal "
+            f"WHERE place!=? AND {shared} AND ts>? AND (heard!='' OR said!='') ORDER BY ts DESC LIMIT ?",
+            (scene.place, *args, cutoff, min(limit, 3)),
         )
-        return [dict(r) for r in rows]
+        return [dict(r) | {"with": self.who_was_there(scene, r["people"])} for r in rows]
 
     def search(self, scene: Scene, query: str, limit: int = 6) -> list[dict[str, Any]]:
         match = _fts(query)
@@ -278,20 +327,21 @@ class Memory:
         hits: list[dict[str, Any]] = []
         where, args = self._note_filter(scene)
         for row in self.store.q(
-            f"SELECT n.id,n.subject,n.text,n.ts,n.place FROM notes_fts f JOIN notes n ON n.id=f.rowid "
+            f"SELECT n.id,n.subject,n.text,n.ts,n.place,n.audience FROM notes_fts f JOIN notes n ON n.id=f.rowid "
             f"WHERE notes_fts MATCH ? AND {where} ORDER BY bm25(notes_fts) LIMIT ?",
             (match, *args, limit),
         ):
             hits.append({"kind": "note", "id": row["id"], "subject": row["subject"], "text": row["text"], "ts": row["ts"]})
         where, args = self._journal_filter(scene)
         for row in self.store.q(
-            f"SELECT j.id,j.ts,j.place_label,j.actor_name,j.heard,j.said FROM journal_fts f JOIN journal j ON j.id=f.rowid "
+            f"SELECT j.id,j.ts,j.place,j.place_label,j.actor_name,j.heard,j.said,j.people FROM journal_fts f JOIN journal j ON j.id=f.rowid "
             f"WHERE journal_fts MATCH ? AND {where} ORDER BY bm25(journal_fts) LIMIT ?",
             (match, *args, limit),
         ):
             hits.append({
                 "kind": "journal", "id": row["id"], "ts": row["ts"], "where": row["place_label"], "who": row["actor_name"],
                 "heard": clip(row["heard"], 500), "said": clip(row["said"], 500),
+                "elsewhere": row["place"] != scene.place, "with": self.who_was_there(scene, row["people"]),
             })
         return hits
 

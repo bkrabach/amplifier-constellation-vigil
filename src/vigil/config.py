@@ -32,6 +32,9 @@ class RuntimeSpec:
     secret_env: dict[str, str] = field(default_factory=dict)
     #: "native" runtimes get engine-specific features (per-turn effort, context snapshots).
     kind: str = "acp"
+    #: An ACP auth method the runtime accepts without a person, such as "api-key" when
+    #: the key is supplied through `secret_env`. Used when the runtime asks to authenticate.
+    auth_method: str = ""
 
 
 @dataclass
@@ -164,6 +167,7 @@ class Config:
             env={k: self.expand(str(v)) for k, v in (table.get("env") or {}).items()},
             secret_env=dict(table.get("secret_env") or {}),
             kind=table.get("kind", "acp"),
+            auth_method=str(table.get("auth_method", "")),
         )
 
     def runtime_env(self, spec: RuntimeSpec) -> dict[str, str]:

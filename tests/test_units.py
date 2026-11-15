@@ -102,9 +102,9 @@ def test_minecraft_scene():
 
 # ---- audiences ---------------------------------------------------------------------
 
-def scene_for(memory: Memory, place: str, audience: str, who: Who | None) -> Scene:
+def scene_for(memory: Memory, place: str, audience: str, who: Who | None, others: list[Who] | None = None) -> Scene:
     scene = Scene(session="s-" + place, surface=place.split(":")[0], place=place, place_label=place, audience=audience, actor=who,
-                  participants=[who] if who else [])
+                  participants=([who] if who else []) + (others or []))
     memory.settle(scene)
     return scene
 
@@ -145,10 +145,39 @@ def test_cross_place_hint_only_for_the_same_linked_person(memory: Memory):
     result = memory.link(slack, slack.actor_person, "minecraft", "DanaCraft", "said her Minecraft name in Slack")
     assert result["linked"] is True
     game = scene_for(memory, "minecraft:world", "group", Who("minecraft", "DanaCraft", "DanaCraft"))
-    hints = memory.elsewhere(game)
-    assert len(hints) == 1 and "release notes" in hints[0]["heard"] and hints[0]["said"] == ""
+    seen = memory.elsewhere(game)
+    assert len(seen) == 1 and "release notes" in seen[0]["heard"] and seen[0]["said"] == "On it." and seen[0]["with"] == "Dana"
     stranger = scene_for(memory, "minecraft:world", "group", Who("minecraft", "Rando", "Rando"))
     assert memory.elsewhere(stranger) == []
+    memory.config.raw.setdefault("mind", {})["cross_space"] = "hints"
+    assert memory.elsewhere(game)[0]["said"] == ""  # a reminder only
+    memory.config.raw["mind"]["cross_space"] = "strict"
+    assert memory.elsewhere(game) == []
+
+
+def test_shared_spaces_travel_with_the_people_in_them(memory: Memory):
+    maya, dev, sam, priya, eli = (Who("slack:T1", u, n) for u, n in (("U1", "Maya"), ("U2", "Dev"), ("U3", "Sam"), ("U4", "Priya"), ("U5", "Eli")))
+    importer = scene_for(memory, "slack:T1:CIMP", "group", sam, [maya, dev])
+    importer.heard = "decision: we skip the CSV edge cases for v1"
+    memory.journal_add(importer, "Noted.", "", "end_turn")
+    memory.note_add(importer, "importer v1", "CSV edge cases are out of scope for v1.", "here")
+    secret = scene_for(memory, "slack:T1:D9", "dm", dev)
+    secret.heard = "between us, the CSV decision worries me"
+    memory.journal_add(secret, "Thanks for telling me.", "", "end_turn")
+    text = lambda scene, q: " ".join(str(h.get("text", "")) + str(h.get("heard", "")) for h in memory.search(scene, q))  # noqa: E731
+    # another sub-team's room: Maya is in both, so it can surface there even when Priya is the one speaking
+    design = scene_for(memory, "slack:T1:CDES", "group", priya, [maya])
+    assert "out of scope" in text(design, "CSV edge cases") and "skip the CSV" in text(design, "CSV edge cases")
+    assert memory.elsewhere(design)[0]["with"] == "Maya"
+    assert "worries" not in text(design, "CSV decision worries")  # the private message does not travel
+    # a room with nobody in common sees none of it
+    other = scene_for(memory, "slack:T1:COTH", "group", eli)
+    assert text(other, "CSV edge cases") == "" and memory.elsewhere(other) == []
+    # a direct message with someone who was there sees the shared part, and only their own private part
+    with_dev = scene_for(memory, "slack:T1:D9", "dm", dev)
+    assert "skip the CSV" in text(with_dev, "CSV") and "worries" in text(with_dev, "CSV decision worries")
+    with_maya = scene_for(memory, "slack:T1:D8", "dm", maya)
+    assert "skip the CSV" in text(with_maya, "CSV") and "worries" not in text(with_maya, "CSV decision worries")
 
 
 def test_thought_scopes(memory: Memory):

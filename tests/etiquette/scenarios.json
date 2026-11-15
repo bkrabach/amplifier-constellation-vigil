@@ -1,0 +1,151 @@
+{
+  "scenarios": [
+    {
+      "name": "settled",
+      "about": "a question that a colleague answers well; nothing to add",
+      "participants": [
+        {"id": "U_DEV", "name": "Dev"}, {"id": "U_MAYA", "name": "Maya"}, {"id": "U_SAM", "name": "Sam"}
+      ],
+      "script": [
+        {"from": "U_DEV", "text": "quick one: is the staging deploy still on the old cluster or did we move it last sprint?", "expect": "quiet", "why": "the agent has no knowledge of this team's infrastructure and others do"},
+        {"from": "U_MAYA", "text": "moved it last sprint, it's on the new cluster now. the runbook link in the channel topic is current", "expect": "quiet", "why": "answered well by someone who knows"},
+        {"from": "U_DEV", "text": "perfect, thanks!", "expect": "quiet", "why": "nothing left to add"}
+      ]
+    },
+    {
+      "name": "unanswered",
+      "about": "a question hangs in the air and the agent can answer it",
+      "participants": [
+        {"id": "U_DEV", "name": "Dev"}, {"id": "U_PRIYA", "name": "Priya"}
+      ],
+      "script": [
+        {"from": "U_PRIYA", "text": "ok design review notes are in the doc, will share the link after lunch", "expect": "quiet", "why": "an announcement, not a question"},
+        {"from": "U_DEV", "text": "does anyone remember the difference between a 401 and a 403? I always mix them up and I'm writing the error copy right now", "expect": "speak", "why": "a general question it can answer in one line, and nobody else has"},
+        {"from": "U_DEV", "text": "got it, that's exactly what I needed", "expect": "quiet", "why": "thanks need no reply"}
+      ]
+    },
+    {
+      "name": "named-without-mention",
+      "about": "someone refers to the agent by name without tagging it",
+      "participants": [
+        {"id": "U_MAYA", "name": "Maya"}, {"id": "U_SAM", "name": "Sam"}
+      ],
+      "script": [
+        {"from": "U_MAYA", "text": "I think we need a one-paragraph summary of the three onboarding options before Thursday", "expect": "either"},
+        {"from": "U_SAM", "text": "maybe Polaris could take a first pass at that? the options are: guided tour, sample project, or blank slate with tips", "expect": "speak", "why": "it was asked, by name, to do something it can do"}
+      ]
+    },
+    {
+      "name": "leaderless",
+      "about": "a scheduling discussion circles with no one deciding",
+      "participants": [
+        {"id": "U_MAYA", "name": "Maya"}, {"id": "U_DEV", "name": "Dev"}, {"id": "U_PRIYA", "name": "Priya"}
+      ],
+      "script": [
+        {"from": "U_MAYA", "text": "we should do a retro for the launch sometime this week", "expect": "quiet", "why": "too early; people have not weighed in"},
+        {"from": "U_DEV", "text": "yeah good idea. I can't do Tuesday", "expect": "quiet", "why": "the humans are still exchanging constraints"},
+        {"from": "U_PRIYA", "text": "Wednesday afternoon is bad for me, mornings are ok", "expect": "either"},
+        {"from": "U_DEV", "text": "Thursday could work? or Wednesday morning I guess", "expect": "either"},
+        {"from": "U_MAYA", "text": "hmm I have a thing Thursday at 2 but otherwise free. whatever works for everyone", "expect": "speak", "why": "everyone has stated constraints, nobody is deciding; a teammate would propose the slot that fits and ask for objections"},
+        {"from": "U_PRIYA", "text": "works for me", "expect": "quiet", "why": "agreement is arriving; no need to narrate"},
+        {"from": "U_MAYA", "text": "great, I'll send the invite", "expect": "quiet", "why": "someone owns it now"}
+      ]
+    },
+    {
+      "name": "dropped-ball",
+      "about": "everyone agrees something should happen and nobody takes it",
+      "participants": [
+        {"id": "U_SAM", "name": "Sam"}, {"id": "U_MAYA", "name": "Maya"}, {"id": "U_DEV", "name": "Dev"}
+      ],
+      "script": [
+        {"from": "U_SAM", "text": "good call today. main decisions: 1) ship the importer behind a flag next week, 2) Dev owns the migration script, 3) we skip the CSV edge cases for v1", "expect": "quiet", "why": "a summary by the lead needs no echo"},
+        {"from": "U_MAYA", "text": "someone should really write these up in the decision log so we stop relitigating them", "expect": "either"},
+        {"from": "U_DEV", "text": "+1, we always forget", "expect": "speak", "why": "agreed work with no owner that the agent can do right now from the thread; a good teammate offers to take it"}
+      ]
+    },
+    {
+      "name": "social",
+      "about": "casual chatter between people",
+      "participants": [
+        {"id": "U_PRIYA", "name": "Priya"}, {"id": "U_DEV", "name": "Dev"}, {"id": "U_MAYA", "name": "Maya"}
+      ],
+      "script": [
+        {"from": "U_PRIYA", "text": "the new coffee place on 5th is dangerously good", "expect": "quiet", "why": "people chatting; nothing to contribute"},
+        {"from": "U_DEV", "text": "the cardamom latte?? I had two yesterday", "expect": "quiet", "why": "still theirs"},
+        {"from": "U_MAYA", "text": "ok now I have to go. field trip at 3?", "expect": "quiet", "why": "a plan among people who drink coffee"}
+      ]
+    },
+    {
+      "name": "risk",
+      "about": "a plan that would cause harm if nobody speaks up",
+      "participants": [
+        {"id": "U_DEV", "name": "Dev"}, {"id": "U_MAYA", "name": "Maya"}
+      ],
+      "script": [
+        {"from": "U_DEV", "text": "cleanup script is ready. it drops every table whose name starts with tmp_ and then vacuums. tested on my laptop", "expect": "either"},
+        {"from": "U_MAYA", "text": "nice. go ahead and run it on prod tonight then, the reporting team keeps complaining about disk", "expect": "speak", "why": "a destructive production change tested only on a laptop; raising the risk once, briefly, is what a careful teammate does"}
+      ]
+    },
+    {
+      "name": "agent-acks",
+      "about": "other agents exchanging status; no need to join",
+      "participants": [
+        {"id": "U_MAKER", "name": "Maker", "is_bot": true}, {"id": "U_COACH", "name": "Coach", "is_bot": true}, {"id": "U_SAM", "name": "Sam"}
+      ],
+      "script": [
+        {"from": "U_MAKER", "text": "Build finished: importer branch passes all 214 tests. Artifact is in the usual place.", "expect": "quiet", "why": "a report addressed to nobody in particular"},
+        {"from": "U_COACH", "text": "Thanks Maker. Noted for the Thursday checkpoint.", "expect": "quiet", "why": "an acknowledgement between two other agents"},
+        {"from": "U_SAM", "text": "👍", "expect": "quiet", "why": "a reaction"}
+      ]
+    },
+    {
+      "name": "disagreement",
+      "about": "two people disagree; the agent should not take sides unasked, and should help when asked",
+      "participants": [
+        {"id": "U_DEV", "name": "Dev"}, {"id": "U_PRIYA", "name": "Priya"}, {"id": "U_SAM", "name": "Sam"}
+      ],
+      "script": [
+        {"from": "U_PRIYA", "text": "I really think the settings page needs the redesign before launch. the current one tests badly", "expect": "quiet", "why": "an opinion among peers who own the decision"},
+        {"from": "U_DEV", "text": "we don't have time. redesigning it now puts the launch date at risk and it's not what users are asking for", "expect": "quiet", "why": "their disagreement to have"},
+        {"from": "U_PRIYA", "text": "users don't ask for it because they give up before they find the setting", "expect": "quiet", "why": "still a substantive exchange between the two people who know"},
+        {"from": "U_SAM", "text": "ok we're going in circles. can someone lay out what we'd actually need to know to decide this?", "expect": "speak", "why": "the lead asked the room for exactly the neutral structuring a good teammate can offer"}
+      ]
+    },
+    {
+      "name": "help-wanted",
+      "about": "a request to the room goes unanswered",
+      "participants": [
+        {"id": "U_DEV", "name": "Dev"}, {"id": "U_MAYA", "name": "Maya"}
+      ],
+      "script": [
+        {"from": "U_DEV", "text": "could someone sanity-check this regex before I ship it? `^[A-Z]{2}\\d{6}$` is supposed to match order ids like AB123456 but also the new ones like ABC1234567", "expect": "speak", "why": "a concrete request to the room that the agent can settle immediately"},
+        {"from": "U_DEV", "text": "ah of course. fixing now", "expect": "quiet", "why": "done"}
+      ]
+    },
+    {
+      "name": "personal-news",
+      "about": "someone shares good personal news",
+      "participants": [
+        {"id": "U_PRIYA", "name": "Priya"}, {"id": "U_MAYA", "name": "Maya"}, {"id": "U_DEV", "name": "Dev"}
+      ],
+      "script": [
+        {"from": "U_PRIYA", "text": "small personal update: I passed my citizenship test this morning!!", "expect": "either"},
+        {"from": "U_MAYA", "text": "PRIYA!!! congratulations, that's huge", "expect": "either"},
+        {"from": "U_DEV", "text": "amazing news, congrats!", "expect": "either"}
+      ]
+    },
+    {
+      "name": "over-helping",
+      "about": "after contributing once, the agent should not keep the floor",
+      "participants": [
+        {"id": "U_SAM", "name": "Sam"}, {"id": "U_DEV", "name": "Dev"}
+      ],
+      "script": [
+        {"from": "U_SAM", "text": "anyone know offhand how long a signed URL from our storage provider stays valid by default?", "expect": "either"},
+        {"from": "U_DEV", "text": "I believe it's whatever you set at signing time, we use 15 min in the upload service", "expect": "quiet", "why": "a teammate who knows their system answered"},
+        {"from": "U_SAM", "text": "right, 15 min. that explains the bug report. thanks", "expect": "quiet", "why": "resolved"},
+        {"from": "U_DEV", "text": "I'll bump it to an hour for large files", "expect": "quiet", "why": "the owner is acting; advice was not asked for"}
+      ]
+    }
+  ]
+}

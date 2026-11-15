@@ -104,6 +104,18 @@ TOOLS: list[dict[str, Any]] = [
 MIND_INSTRUCTIONS = "Your own notebook, journal, people and follow-ups. Results are already limited to what the current audience may know."
 
 
+_MIND_TOOLS = {tool["name"] for tool in TOOLS}
+_TOOL_TITLE = re.compile(r"^(?:mcp__)?(?:(?P<server>[A-Za-z0-9-]+)(?:__|[./:]))?(?P<tool>mind_[a-z_]+)\b")
+
+
+def _names_mind_tool(title: str) -> bool:
+    """Runtimes label a tool call differently: `mind_note`, `mcp__mind__mind_note`,
+    `mind.mind_note`, `mind/mind_note`. Accept those, and nothing that names
+    another server."""
+    match = _TOOL_TITLE.match(title.strip())
+    return bool(match) and match.group("tool") in _MIND_TOOLS and match.group("server") in (None, MIND_SERVER)
+
+
 def spoken(text: str) -> str:
     """What was actually said aloud, given the participation conventions experiences use."""
     text = _FOLLOW_UP_LINE.sub("", text or "").strip()
@@ -271,8 +283,9 @@ class Mind:
     def own_permission(self, params: dict[str, Any]) -> dict[str, Any] | None:
         """Approve the runtime's request to call one of the mind's own tools. Those
         only touch Vigil's memory; everything else goes to the client to decide."""
-        raw = (params.get("toolCall") or {}).get("rawInput")
-        if not isinstance(raw, dict) or raw.get("server") != MIND_SERVER:
+        call = params.get("toolCall") or {}
+        raw = call.get("rawInput")
+        if not (isinstance(raw, dict) and raw.get("server") == MIND_SERVER) and not _names_mind_tool(str(call.get("title") or "")):
             return None
         options = params.get("options") or []
         chosen = next((o for o in options if o.get("kind") == "allow_once"), None) or next((o for o in options if str(o.get("kind", "")).startswith("allow")), None)
@@ -464,7 +477,8 @@ class Mind:
                 if hit["kind"] == "note":
                     lines.append(f"note #{hit['id']} [{hit['subject']}] ({brief.ago(hit['ts'])}): {hit['text']}")
                 else:
-                    lines.append(f"journal, {brief.ago(hit['ts'])}, {hit['where']}: {hit['who'] or 'someone'} said \"{hit['heard']}\" / you said \"{hit['said']}\"")
+                    origin = f" (another shared space; {hit['with']} was there, others here may not have seen it)" if hit.get("elsewhere") and scene.audience != "owner" else ""
+                    lines.append(f"journal, {brief.ago(hit['ts'])}, {hit['where']}{origin}: {hit['who'] or 'someone'} said \"{hit['heard']}\" / you said \"{hit['said']}\"")
             return "\n".join(lines)
         if name == "mind_note":
             subject, text = str(args.get("subject") or "").strip(), str(args.get("note") or "").strip()

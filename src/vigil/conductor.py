@@ -35,6 +35,7 @@ STREAM_LIMIT = 32 * 1024 * 1024
 SESSION_SETUP = ("session/new", "session/load", "session/resume")
 RUNTIME_META = "io.github.bkrabach.agent-runtime"
 VIGIL_META = "dev.vigil"
+AUTH_REQUIRED = -32000
 
 
 class RuntimeProc:
@@ -48,6 +49,7 @@ class RuntimeProc:
         self.proc: asyncio.subprocess.Process | None = None
         self.conn: Connection | None = None
         self.initialize_result: dict[str, Any] | None = None
+        self.authenticated = False
 
     async def start(self) -> None:
         env = self.config.runtime_env(self.spec)
@@ -71,7 +73,16 @@ class RuntimeProc:
     async def request(self, method: str, params: Any = None) -> Any:
         if not self.conn:
             raise ConnectionError("runtime is not running")
-        return await self.conn.send_request(method, params)
+        try:
+            return await self.conn.send_request(method, params)
+        except RequestError as error:
+            # A runtime whose credential Vigil supplies may still want the ACP
+            # authenticate step. Do it once with the configured method, then retry.
+            if error.code != AUTH_REQUIRED or not self.spec.auth_method or self.authenticated or method == "authenticate":
+                raise
+            self.authenticated = True
+            await self.conn.send_request("authenticate", {"methodId": self.spec.auth_method})
+            return await self.conn.send_request(method, params)
 
     async def notify(self, method: str, params: Any = None) -> None:
         if self.conn:
