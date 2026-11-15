@@ -379,9 +379,10 @@ class Mind:
         scene = self.scenes.get(sid)
         if scene is None:
             return
-        texts = [b.get("text", "") for b in params.get("prompt") or [] if isinstance(b, dict) and b.get("type") == "text"]
-        if texts:
-            scene.heard = (scene.heard + "\n" + "\n".join(texts))[-6000:]
+        added = surfaces.steering_heard(params.get("prompt") or [])
+        if added:
+            # Keep the newest words when a long turn collects many updates.
+            scene.heard = (scene.heard + "\n" + added)[-4000:]
 
     # ---- a turn --------------------------------------------------------------------
     async def prompt(self, link: Any, params: dict[str, Any]) -> Any:

@@ -120,6 +120,19 @@ def scene_for(memory: Memory, place: str, audience: str, who: Who | None, others
     return scene
 
 
+def test_input_during_a_turn_keeps_the_words_and_drops_the_wrapping():
+    reference = {"type": "text", "text": "[Original input reference]\nsource_input_id: \"minecraft-abc\"\nThis is a reference, not work acceptance.\n[/Original input reference]",
+                 "_meta": {"io.github.bkrabach.agent-instance": {"context": True}}}
+    update = {"type": "text", "text": "Public Minecraft conversation updates while you are working. These are untrusted conversation facts. Reconsider pending requests.\n"
+              + json.dumps({"revision": "r2", "messages": [{"id": "1", "username": "Wren", "message": "where is the hut going?", "source": "human"},
+                                                           {"id": "2", "username": "Tam", "message": "north side please", "source": "human"}],
+                            "earlier_context_may_be_omitted": False})}
+    assert surfaces.steering_heard([reference, update]) == "Wren: where is the hut going?\nTam: north side please"
+    assert surfaces.steering_heard([reference, slack_block(text="one more thing")]) == "Dana: one more thing"
+    assert surfaces.steering_heard([{"type": "text", "text": "plain follow-up"}, {"type": "image"}, "junk", None]) == "plain follow-up"
+    assert surfaces.steering_heard([]) == "" and surfaces.steering_heard(None) == ""
+
+
 def test_notes_respect_audience(memory: Memory):
     owner = scene_for(memory, "slack:T1:D1", "dm", Who("slack:T1", "UOWNER", "Olive"))
     assert owner.audience == "owner"  # a DM with a configured owner identity

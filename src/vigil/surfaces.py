@@ -270,6 +270,38 @@ def _minecraft(scene: Scene, texts: list[str]) -> bool:
     return True
 
 
+def steering_heard(blocks: list[Any]) -> str:
+    """What people said in input that arrives while a turn is running.
+
+    Experiences wrap that input the way they wrap a prompt: an Instance reference
+    block, a line of guidance, then the facts as JSON. Memory should keep the words,
+    one line per speaker, and none of the wrapping. Never raises."""
+    lines: list[str] = []
+    for block in blocks or []:
+        try:
+            if not isinstance(block, dict) or block.get("type") != "text":
+                continue
+            text = str(block.get("text") or "")
+            if not text.strip() or _is_instance_block(block, text) or text.startswith("[Original input reference]"):
+                continue
+            probe = Scene(session="")
+            if _slack(probe, text) and probe.heard:
+                lines.append(f"{probe.actor.name}: {probe.heard}" if probe.actor and probe.actor.name else probe.heard)
+                continue
+            at = text.find("\n{")
+            data = _json_tail(text, at + 1) if at >= 0 else None
+            messages = data.get("messages") if isinstance(data, dict) else None
+            if isinstance(messages, list):
+                for message in messages:
+                    if isinstance(message, dict) and message.get("message"):
+                        lines.append(f'{message.get("username") or "someone"}: {message["message"]}')
+                continue
+            lines.append(text.strip()[:1500])
+        except Exception:  # a reader must never break a turn
+            continue
+    return "\n".join(lines)
+
+
 def read(session: str, blocks: list[dict[str, Any]], meta: dict[str, Any] | None = None) -> Scene:
     """Build the Scene for one prompt. Never raises on unfamiliar input."""
     scene = Scene(session=session)
