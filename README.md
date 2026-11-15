@@ -135,7 +135,7 @@ Checked with `tests/runtime_matrix.py` (turn, brief, mind tool, recall in a new 
 | Native engine: Anthropic (Opus, Sonnet, Haiku), OpenAI (Sol, Astra), Gemini (Flash) | all five checks pass |
 | Claude Agent ACP, Codex ACP, OpenCode, Copilot CLI | all five checks pass |
 | Gemini CLI, with its workspace trusted | all five checks pass |
-| Native engine `chat-completions` against api.openai.com | fails: the engine sends `max_tokens`, which current OpenAI models reject in favour of `max_completion_tokens` (an engine issue, reported upstream) |
+| Native engine `chat-completions` against api.openai.com | fails as released: current OpenAI models reject `max_tokens` and, with tools, any reasoning effort but `none`. With the parameter renamed (engine fix proposed upstream) and `--reasoning-effort none`, all five checks pass. For OpenAI models use the `openai` provider. |
 
 To see why a runtime stalls, start the daemon with `VIGIL_TRACE=1`: `logs/vigil.log` then records the shape of every relayed message and every request to the mind's tool server, never their text. The matrix turns this on.
 
