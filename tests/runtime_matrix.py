@@ -174,7 +174,8 @@ async def run_one(entry: dict, base: Path, engine_binary: str | None) -> dict:
             await sh(VIGIL, "--home", str(home), "engine", "install", "--source", engine_binary, "--allow-unpinned")
             await sh(VIGIL, "--home", str(home), "engine", "init", "--", *entry["engine"])
         log = open(home / "daemon.out", "wb")
-        daemon = await asyncio.create_subprocess_exec(VIGIL, "--home", str(home), "serve", stdout=log, stderr=log)
+        daemon = await asyncio.create_subprocess_exec(VIGIL, "--home", str(home), "serve", stdout=log, stderr=log,
+                                                      env={**os.environ, "VIGIL_TRACE": "1"})  # message shapes land in logs/vigil.log
         for _ in range(100):
             if (home / "run" / "vigil.sock").exists():
                 break

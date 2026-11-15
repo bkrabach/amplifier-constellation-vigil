@@ -33,6 +33,8 @@ log = logging.getLogger("vigil.conductor")
 
 STREAM_LIMIT = 32 * 1024 * 1024
 SESSION_SETUP = ("session/new", "session/load", "session/resume")
+#: Set VIGIL_TRACE=1 in the daemon's environment to log the shape of every relayed message.
+TRACE = os.environ.get("VIGIL_TRACE", "") not in ("", "0")
 RUNTIME_META = "io.github.bkrabach.agent-runtime"
 VIGIL_META = "dev.vigil"
 AUTH_REQUIRED = -32000
@@ -189,8 +191,29 @@ class FrontLink:
         except Exception:
             pass
 
+    def _trace(self, arrow: str, method: str, params: Any) -> None:
+        """With VIGIL_TRACE=1, log the shape of each relayed message (never its text).
+        This is how to see why a runtime stalls: what it asked for and what it was sent."""
+        if not TRACE:
+            return
+        detail = ""
+        if isinstance(params, dict):
+            update = params.get("update") if method == "session/update" else None
+            call = params.get("toolCall") if method == "session/request_permission" else update
+            if isinstance(update, dict):
+                detail = f" {update.get('sessionUpdate')}"
+            if isinstance(call, dict) and (call.get("title") or call.get("toolCallId")):
+                raw = call.get("rawInput")
+                detail += f" title={str(call.get('title'))[:80]!r} kind={call.get('kind')} status={call.get('status')} rawInput={sorted(raw) if isinstance(raw, dict) else type(raw).__name__}"
+            if method == "session/request_permission":
+                detail += f" options={[o.get('kind') for o in params.get('options') or [] if isinstance(o, dict)]}"
+            if method in SESSION_SETUP:
+                detail += f" mcpServers={[(m.get('name'), m.get('type')) for m in params.get('mcpServers') or [] if isinstance(m, dict)]}"
+        log.info("trace link%s %s %s%s", self.id, arrow, method, detail)
+
     # ---- client -> runtime ---------------------------------------------------------
     async def on_front(self, method: str, params: Any, is_notification: bool) -> Any:
+        self._trace("client>", method, params)
         if is_notification:
             if method == "session/cancel":
                 self.mind.note_cancel(self, params or {})
@@ -210,6 +233,7 @@ class FrontLink:
 
     # ---- runtime -> client ---------------------------------------------------------
     async def on_runtime(self, method: str, params: Any, is_notification: bool) -> Any:
+        self._trace("<runtime", method, params)
         if is_notification:
             if method == "session/update" and isinstance(params, dict):
                 params = self.mind.observe_update(self, params)
