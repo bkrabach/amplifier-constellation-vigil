@@ -158,6 +158,22 @@ def test_a_runtime_that_never_opens_the_tools_is_told_so(run):
     run(scenario, port=47937)
 
 
+def test_a_restart_waits_for_a_running_turn(run):
+    async def scenario(config, daemon):
+        client = Client()
+        await client.attach(config)
+        sid = (await client.conn.send_request("session/new", {"cwd": config.workspace, "mcpServers": []}))["sessionId"]
+        turn = asyncio.create_task(client.conn.send_request("session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": slack("C1", "U2", "slow-turn please")}]}))
+        await asyncio.sleep(0.3)
+        assert daemon.mind.turns  # the turn is in flight
+        daemon._stop.set()  # what a stop signal does
+        result = await asyncio.wait_for(turn, 10)
+        # the turn finished and reached the client before the daemon closed the connection
+        assert result["stopReason"] == "end_turn" and client.text().endswith("done")
+        assert daemon.store.one("SELECT status FROM events ORDER BY id DESC LIMIT 1")["status"] == "done"
+    run(scenario, port=47938)
+
+
 def test_permissions_own_tools_only(run):
     async def scenario(config, daemon):
         client = Client()

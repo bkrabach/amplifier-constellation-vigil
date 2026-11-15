@@ -167,7 +167,7 @@ def cmd_status(args: argparse.Namespace) -> None:
     decisions = status["decisions_24h"]
     print(f"{status['agent']} — vigil {status['version']}, awake {status['uptime_seconds'] // 60} min")
     print(f"runtime: {runtime['main']} ({runtime['model'] or 'model unknown'}); configured: {', '.join(runtime['configured'])}")
-    print(f"attached now: {len(status['attached'])}; turns in 24h: {status['turns_24h']} (quiet wake-ups: {status['quiet_wakes_24h']})")
+    print(f"attached now: {len(status['attached'])} ({status.get('running_turns', 0)} turn(s) running); turns in 24h: {status['turns_24h']} (quiet wake-ups: {status['quiet_wakes_24h']})")
     print(f"memory: {status['people']} people, {status['notes']} notes, {status['journal']} journal entries; last consolidation: {status['last_dream'] or 'never'}")
     print(f"holding: {status['pending_follow_ups']} follow-up(s); tasks: {status['tasks'] or 'none'}")
     if status.get("sessions_without_tools_24h"):

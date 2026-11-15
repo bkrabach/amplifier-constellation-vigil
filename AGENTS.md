@@ -38,6 +38,10 @@ Vigil is an always-on engine for a Constellation Agent Instance. Read [README.md
 
 `tests/test_conductor.py` runs the real daemon against `tests/fake_runtime.py` and checks ordering, permissions, replay and the quiet wake-up. `tests/drive.py` talks to a live daemon as an experience would, including through an Instance with `--command`. A passing suite shows mechanics; judge model behaviour with real turns.
 
+## Redeploying a live agent
+
+A restart waits up to `server.drain_seconds` (45 by default) for running turns to finish, and `vigil status` shows how many are running. A turn longer than that is cut off. For a game connection that means unsettled effects, and the connector then pauses the agent's work there until someone reviews it. Look before you restart, and do not redeploy in the middle of a session you are testing.
+
 ## When a runtime misbehaves
 
 Do not guess. Run it through `tests/runtime_matrix.py --only NAME --keep` and read `logs/vigil.log` in the kept home: the trace shows whether the runtime opened the mind's tool server and what it asked permission for. A runtime that never calls `tools/list` has no mind tools, whatever it advertised. The matrix refuses every permission request that is not for a mind tool; keep it that way, because a model without its tools will otherwise explore the machine.

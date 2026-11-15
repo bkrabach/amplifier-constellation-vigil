@@ -68,6 +68,8 @@ async def handler(method: str, params, is_notification: bool):
         text = " ".join(b.get("text", "") for b in blocks[:-1]) if len(blocks) > 1 else blocks[0].get("text", "")
         for index in range(5):
             await _update(sid, {"sessionUpdate": "agent_message_chunk", "messageId": "m1", "content": {"type": "text", "text": f"part{index} "}})
+        if "slow-turn" in text:
+            await asyncio.sleep(1.2)
         if "ask-mind" in text:
             answer = await conn.send_request("session/request_permission", {
                 "sessionId": sid, "toolCall": {"toolCallId": "t1", "rawInput": {"server": "mind", "tool": "mind_note", "arguments": {}}},

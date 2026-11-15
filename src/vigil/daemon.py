@@ -89,6 +89,7 @@ class Daemon:
             "agent": self.config.agent_name,
             "uptime_seconds": int(time.time() - self.started),
             "runtime": {"main": self.config.main_runtime, "background": self.config.background_runtime, "configured": self.config.runtime_names(), "model": self.engine_model()},
+            "running_turns": len(self.mind.turns),
             "attached": [{"link": link.id, "sessions": sorted(link.sessions), "seconds": int(time.time() - link.opened)} for link in self.links.values()],
             "turns_24h": store.one("SELECT count(*) AS n FROM events WHERE kind='prompt' AND ts>?", (day,))["n"],
             "sessions_without_tools_24h": store.one("SELECT count(*) AS n FROM sessions WHERE updated>? AND turns>=1 AND tools_seen IS NULL", (day,))["n"],
@@ -182,9 +183,21 @@ class Daemon:
         try:
             await self._stop.wait()
         finally:
-            log.info("stopping")
             scheduler.cancel()
-            server.close()
+            server.close()  # no new connections; the bridge falls back to the runtime meanwhile
+            # Let turns that are running finish. Cutting one off leaves its experience
+            # unsure what happened (a game connector then holds further work for review).
+            drain = float(self.config.get("server.drain_seconds", 45))
+            waited = 0.0
+            if self.mind.turns:
+                log.info("stopping: waiting up to %.0fs for %d running turn(s)", drain, len(self.mind.turns))
+            while self.mind.turns and waited < drain:
+                await asyncio.sleep(0.25)
+                waited += 0.25
+            if self.mind.turns:
+                log.warning("stopping with %d turn(s) still running after %.0fs; they are cut off", len(self.mind.turns), drain)
+            else:
+                log.info("stopping")
             for link in list(self.links.values()):
                 await link.close()
             await self.mind.close()
