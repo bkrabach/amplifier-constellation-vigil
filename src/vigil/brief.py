@@ -79,6 +79,8 @@ def compose(scene: Scene, memory: Memory, config: Config, extras: dict[str, Any]
     if scene.mode in MODE_TEXT:
         here += f" This turn: {MODE_TEXT[scene.mode]}."
     lines.append(here)
+    if scene.surface == "minecraft" and scene.mode != "ambient":
+        lines.append("People in the game are standing next to you in real time. Before something that takes more than a few seconds, say a word first so they know you are on it.")
 
     # People present, with what may be known about them here.
     people_lines = []
