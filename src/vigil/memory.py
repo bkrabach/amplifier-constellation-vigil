@@ -129,10 +129,13 @@ class Memory:
     def resolve(self, who: Who) -> str:
         """Return the person behind a surface identity, creating a new person the first
         time a handle is seen. A new handle is never merged with someone by name alone."""
-        row = self.store.one("SELECT person, display FROM identities WHERE surface=? AND handle=?", (who.surface, who.handle))
+        row = self.store.one("SELECT person, display, is_agent FROM identities WHERE surface=? AND handle=?", (who.surface, who.handle))
         if row:
             if who.name and who.name != row["display"]:
                 self.store.run("UPDATE identities SET display=? WHERE surface=? AND handle=?", (who.name, who.surface, who.handle))
+            if who.is_agent and not row["is_agent"]:
+                # Some places only say that a participant is an agent when it speaks.
+                self.store.run("UPDATE identities SET is_agent=1 WHERE surface=? AND handle=?", (who.surface, who.handle))
             return row["person"]
         person = "p_" + uuid.uuid4().hex[:10]
         self.store.run(
