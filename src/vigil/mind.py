@@ -402,6 +402,8 @@ class Mind:
         turn = self.turns[sid] = Turn()
         event = self.store.event_begin("prompt", sid, scene.place, {"surface": scene.surface, "mode": scene.mode, "audience": scene.audience})
         try:
+            if scene.wake:
+                self.store.meta_set(f"wake:{scene.place}", "0")
             if scene.mode == "continuation" and scene.wake and not self.memory.thoughts_due(scene):
                 # Our own wake-up, and nothing is ready: answer it without a model call.
                 await self._arm_wake(sid, scene, None)
@@ -590,9 +592,20 @@ class Mind:
                 return
         else:
             self.quiet_hops.pop(scene.place, None)
+        # One wake-up per place is enough. Every turn ends here, and without this each
+        # one schedules its own, so they all fire together when the thought comes due.
+        fire_at = now() + after
+        key = f"wake:{scene.place}"
+        try:
+            armed = float(self.store.meta_get(key) or 0)
+        except ValueError:
+            armed = 0.0
+        if now() < armed <= fire_at + 5:
+            return
         goal = f"[vigil:wake:{secrets.token_hex(5)}] Return to this conversation when something you are holding for it is due. Stay quiet if nothing is ready."
         try:
             await call_tool(self.http, server, "slack_follow_up", {"after_seconds": after, "goal": goal}, timeout=5.0)
+            self.store.meta_set(key, str(fire_at))
         except Exception as error:
             log.info("wake not armed for %s: %s", scene.place, error)
 

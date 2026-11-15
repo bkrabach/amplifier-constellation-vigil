@@ -370,6 +370,43 @@ def test_only_a_thought_held_for_this_place_schedules_a_wake(memory: Memory):
     assert mind._next_wake(scene_for(memory, "slack:T1:C2", "group", Who("slack:T1", "U2", "Dana"))) is None
 
 
+def test_one_wake_is_armed_per_place_not_one_per_turn(memory: Memory, monkeypatch):
+    import asyncio
+
+    from vigil import mind as mind_module
+    from vigil.mind import Mind, Turn
+
+    calls = []
+
+    async def fake_call(http, server, name, args, timeout=6.0):
+        calls.append((name, args["after_seconds"]))
+        return {}
+
+    monkeypatch.setattr(mind_module, "call_tool", fake_call)
+
+    class Bare(Mind):
+        def __init__(self, memory):
+            self.memory, self.store, self.config = memory, memory.store, memory.config
+            self._http, self.quiet_hops = object(), {}
+            self.servers = {"s": [{"name": "slack_conversations", "url": "http://127.0.0.1:1/mcp"}]}
+
+    mind = Bare(memory)
+    channel = scene_for(memory, "slack:T1:C1", "group", Who("slack:T1", "U2", "Dana"))
+    memory.thought_add(channel, "followup", "post the link here", time.time() + 600, "here")
+    for _ in range(4):  # four turns end in this channel while the thought is pending
+        asyncio.run(mind._arm_wake("s", channel, Turn()))
+    assert len(calls) == 1 and calls[0][0] == "slack_follow_up" and 598 <= calls[0][1] <= 602
+    # something sooner is added: a sooner wake is armed, once
+    memory.thought_add(channel, "followup", "check the build", time.time() + 60, "here")
+    asyncio.run(mind._arm_wake("s", channel, Turn()))
+    asyncio.run(mind._arm_wake("s", channel, Turn()))
+    assert len(calls) == 2 and 58 <= calls[1][1] <= 62
+    # once that wake has arrived, the next turn may arm again
+    memory.store.meta_set("wake:slack:T1:C1", "0")
+    asyncio.run(mind._arm_wake("s", channel, Turn()))
+    assert len(calls) == 3
+
+
 def test_brief_says_a_game_reply_is_spoken_aloud(memory: Memory):
     game = scene_for(memory, "minecraft:world", "group", Who("minecraft", "Wren", "Wren"))
     text, _ = compose(game, memory, memory.config, {})
