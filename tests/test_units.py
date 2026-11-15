@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -347,6 +348,26 @@ def test_only_a_real_mind_tool_request_is_approved_automatically():
     assert _own_tool({"title": "mcp__slack__mind_note", "kind": "other"}) is None
     assert _own_tool({"title": "minecraft.mind_note", "kind": "other"}) is None
     assert _own_tool({"title": "", "kind": "other"}) is None and _own_tool({}) is None
+
+
+def test_only_a_thought_held_for_this_place_schedules_a_wake(memory: Memory):
+    from vigil.mind import Mind
+
+    class Bare(Mind):  # just enough of a mind to ask the question
+        def __init__(self, memory):
+            self.memory, self.store = memory, memory.store
+
+    mind = Bare(memory)
+    channel = scene_for(memory, "slack:T1:C1", "group", Who("slack:T1", "U2", "Dana"))
+    assert mind._next_wake(channel) is None
+    # A thought that follows a person is delivered when they speak. A wake-up with nobody
+    # speaking cannot deliver it, so it must not schedule one (it used to, every few seconds).
+    memory.thought_add(channel, "followup", "tell Dana what Sam said", 0, "person")
+    assert mind._next_wake(channel) is None and memory.thoughts_due(channel)
+    memory.thought_add(channel, "followup", "post the link here", time.time() + 600, "here")
+    wait = mind._next_wake(channel)
+    assert wait is not None and 590 < wait <= 600
+    assert mind._next_wake(scene_for(memory, "slack:T1:C2", "group", Who("slack:T1", "U2", "Dana"))) is None
 
 
 def test_brief_says_a_game_reply_is_spoken_aloud(memory: Memory):

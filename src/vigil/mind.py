@@ -220,6 +220,7 @@ class Mind:
         self.decider: decisions.Decider = daemon.decider
         self.tokens: dict[str, str] = {}
         self.used_tokens: set[str] = set()
+        self.quiet_hops: dict[str, int] = {}
         self.tools_ok: set[str] = set()
         self.tools_warned: set[str] = set()
         self.scenes: dict[str, Scene] = {}
@@ -550,8 +551,13 @@ class Mind:
 
     # ---- coming back ---------------------------------------------------------------
     def _next_wake(self, scene: Scene) -> float | None:
+        """Seconds until something a wake-up in this conversation could deliver. Only a
+        thought held for this place counts: one that follows a person is delivered when
+        that person speaks, and a wake-up with nobody speaking cannot deliver it."""
         soonest: float | None = None
         for thought in self.memory.thoughts_pending(scene.place):
+            if thought["scope"] != "here":
+                continue
             wait = max(0.0, thought["due"] - now())
             soonest = wait if soonest is None else min(soonest, wait)
         running = self.store.one("SELECT count(*) AS n FROM tasks WHERE place=? AND state IN ('queued','running')", (scene.place,))
@@ -570,8 +576,20 @@ class Mind:
         server = next((s for s in self.servers.get(sid) or [] if str(s.get("name", "")).startswith("slack") and s.get("url")), None)
         wait = self._next_wake(scene)
         if server is None or wait is None or wait > float(self.config.mind("followup_chain_horizon_hours", 24)) * 3600:
+            self.quiet_hops.pop(scene.place, None)
             return
         after = int(min(3600, max(5, wait + 2)))
+        if turn is None:
+            # A wake-up that found nothing to deliver. It should only happen on the way
+            # to something due later; never let it turn into a tight loop.
+            hops = self.quiet_hops.get(scene.place, 0) + 1
+            self.quiet_hops[scene.place] = hops
+            after = max(after, 30)
+            if hops > 40:
+                log.warning("wake chain for %s stopped after %d quiet hops with nothing delivered", scene.place, hops)
+                return
+        else:
+            self.quiet_hops.pop(scene.place, None)
         goal = f"[vigil:wake:{secrets.token_hex(5)}] Return to this conversation when something you are holding for it is due. Stay quiet if nothing is ready."
         try:
             await call_tool(self.http, server, "slack_follow_up", {"after_seconds": after, "goal": goal}, timeout=5.0)
