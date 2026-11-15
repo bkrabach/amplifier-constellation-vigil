@@ -105,15 +105,48 @@ MIND_INSTRUCTIONS = "Your own notebook, journal, people and follow-ups. Results 
 
 
 _MIND_TOOLS = {tool["name"] for tool in TOOLS}
-_TOOL_TITLE = re.compile(r"^(?:mcp__)?(?:(?P<server>[A-Za-z0-9-]+)(?:__|[./:]))?(?P<tool>mind_[a-z_]+)\b")
+_MIND_PARAMS = {tool["name"]: set((tool.get("inputSchema") or {}).get("properties") or {}) for tool in TOOLS}
+#: A whole tool identifier and nothing after it, except an argument list in brackets
+#: (one runtime titles a call `mind_note(subject: ...)`). A title is display text and
+#: can contain what the model wrote, so a title that merely starts with a tool name is
+#: not enough: `mind_note; curl ...` is a shell command.
+_TOOL_TITLE = re.compile(r"(?:mcp__(?P<a>[A-Za-z0-9-]+)__|(?P<b>[A-Za-z0-9-]+)[./:])?(?P<tool>mind_[a-z_]+)(?P<args>\(.*\))?", re.S)
+#: What kind of action a runtime says a call is. Its harness sets this, not the model.
+#: An MCP tool is "other" (or unlabelled); a shell command, an edit or a fetch never is.
+_MCP_KINDS = (None, "", "other")
 
 
-def _names_mind_tool(title: str) -> bool:
-    """Runtimes label a tool call differently: `mind_note`, `mcp__mind__mind_note`,
-    `mind.mind_note`, `mind/mind_note`. Accept those, and nothing that names
-    another server."""
-    match = _TOOL_TITLE.match(title.strip())
-    return bool(match) and match.group("tool") in _MIND_TOOLS and match.group("server") in (None, MIND_SERVER)
+def _own_tool(call: dict[str, Any], meta: dict[str, Any] | None = None) -> str | None:
+    """Which mind tool a permission request is for, or None.
+
+    The answer decides an automatic approval, so it must not rest on text the model
+    controls. Two shapes are accepted:
+
+    - The native runtime's envelope, `rawInput == {server, tool, arguments}`, exactly.
+      A different tool cannot carry its own required arguments inside those three keys.
+    - A runtime that sends only a title: the title must be the whole identifier of a
+      mind tool, the call's kind must be the one harnesses give MCP tools, the raw
+      arguments (when present) must all be parameters of that tool, and the harness's
+      own tool name (when it supplies one) must agree.
+    """
+    raw = call.get("rawInput")
+    if isinstance(raw, dict) and set(raw) == {"server", "tool", "arguments"}:
+        ok = raw["server"] == MIND_SERVER and raw["tool"] in _MIND_TOOLS and isinstance(raw["arguments"], dict)
+        return raw["tool"] if ok else None
+    if call.get("kind") not in _MCP_KINDS:
+        return None
+    match = _TOOL_TITLE.fullmatch(str(call.get("title") or "").strip())
+    if not match or match.group("tool") not in _MIND_TOOLS or (match.group("a") or match.group("b")) not in (None, MIND_SERVER):
+        return None
+    tool = match.group("tool")
+    if match.group("args") and call.get("kind") != "other":
+        return None  # the `name(arguments)` form is only trusted from a harness that labels the call
+    if raw is not None and not (isinstance(raw, dict) and set(raw) <= _MIND_PARAMS[tool]):
+        return None
+    harness = ((meta or {}).get("claudeCode") or {}) if isinstance(meta, dict) else {}
+    if isinstance(harness, dict) and harness.get("toolName") not in (None, tool, f"mcp__{MIND_SERVER}__{tool}"):
+        return None
+    return tool
 
 
 def spoken(text: str) -> str:
@@ -328,8 +361,7 @@ class Mind:
         """Approve the runtime's request to call one of the mind's own tools. Those
         only touch Vigil's memory; everything else goes to the client to decide."""
         call = params.get("toolCall") or {}
-        raw = call.get("rawInput")
-        if not (isinstance(raw, dict) and raw.get("server") == MIND_SERVER) and not _names_mind_tool(str(call.get("title") or "")):
+        if not isinstance(call, dict) or _own_tool(call, params.get("_meta") or call.get("_meta")) is None:
             return None
         options = params.get("options") or []
         chosen = next((o for o in options if o.get("kind") == "allow_once"), None) or next((o for o in options if str(o.get("kind", "")).startswith("allow")), None)

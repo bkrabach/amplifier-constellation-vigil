@@ -121,5 +121,5 @@ Other guidance is applied in the harness instead of in text: effort is set throu
 
 - It reads no other component's files and uses no other component's credentials. It calls an experience's tool only through the descriptor that experience handed to the session.
 - It advertises only what the runtime negotiated, plus its own identity. It removes the native history profile, because an Instance uses that to run the engine binary against its store, and Vigil is not that binary.
-- It approves permission requests only for its own tools. Everything else goes to the client, so each experience's approval policy stands.
+- It approves permission requests only for its own tools. Everything else goes to the client, so each experience's approval policy stands. Because that approval is automatic, it never rests on text a model controls: Vigil accepts the native runtime's exact `{server, tool, arguments}` envelope, or a request whose title is the whole identifier of a mind tool, whose kind is the one harnesses give MCP tools, and whose raw arguments are all parameters of that tool. A shell command that begins with a tool's name, or another tool that carries `server: "mind"` among its arguments, is passed to the client like anything else.
 - It adds no social gate of its own in front of prompts an Instance has admitted.

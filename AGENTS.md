@@ -25,6 +25,7 @@ Vigil is an always-on engine for a Constellation Agent Instance. Read [README.md
 - **Every memory read goes through an audience filter.** A new query that returns notes, journal rows or thoughts must take a `Scene` and filter by it. Add a test in `tests/test_units.py` that shows a group cannot see what it should not.
 - **A reader must never raise.** An unfamiliar prompt yields a restrictive Scene, not an error.
 - **Keep the mind tool list stable.** Tools are part of a session's cached prefix. Add tools rarely, and give each at least one required argument.
+- **Automatic approval must not trust model text.** `_own_tool` in `mind.py` decides which permission requests Vigil approves by itself. A title is display text and raw arguments are often the model's own. Loosen that check only with a test in `tests/test_units.py` showing a forged request is still refused.
 - **Use declared interfaces only.** Do not read another component's files or secrets. Call an experience's tool through the descriptor it gave the session.
 - **Do not add a second social gate.** Whether to speak in a group is the Instance's attention decision.
 
