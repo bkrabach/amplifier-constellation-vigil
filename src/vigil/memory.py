@@ -65,6 +65,9 @@ class Memory:
             self.store.run("ALTER TABLE identities ADD COLUMN claimed_person TEXT")
         if "people" not in {row["name"] for row in self.store.q("PRAGMA table_info(notes)")}:
             self.store.run("ALTER TABLE notes ADD COLUMN people TEXT")
+        if "source_id" not in {row["name"] for row in self.store.q("PRAGMA table_info(journal)")}:
+            self.store.run("ALTER TABLE journal ADD COLUMN source_id TEXT")
+        self.store.run("CREATE INDEX IF NOT EXISTS journal_source ON journal(source_id)")
 
     # ---- who is here ---------------------------------------------------------------
     @property
@@ -366,16 +369,37 @@ class Memory:
     # ---- journal -------------------------------------------------------------------
     def journal_add(self, scene: Scene, said: str, did: str, stop: str) -> int:
         row_id = self.store.run(
-            "INSERT INTO journal(ts,session,surface,place,place_label,thread,audience,actor,actor_name,people,mode,heard,said,did,stop) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO journal(ts,session,surface,place,place_label,thread,audience,actor,actor_name,people,mode,heard,said,did,stop,source_id) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 now(), scene.session, scene.surface, scene.place, scene.place_label, scene.thread, scene.audience,
                 scene.actor_person, self.name_of(scene.actor_person) if scene.actor_person else "",
-                json.dumps(sorted(set(scene.people.values()))), scene.mode, scene.heard[:4000], said[:4000], did[:600], stop,
+                json.dumps(sorted(set(scene.people.values()))), scene.mode, scene.heard[:4000], said[:4000], did[:600], stop, scene.source_id,
             ),
         )
         self.store.run("INSERT INTO journal_fts(rowid,heard,said) VALUES(?,?,?)", (row_id, scene.heard[:4000], said[:4000]))
         return row_id
+
+    def overhear(self, scene: Scene) -> int:
+        """Keep what else was said in this room. An experience shows recent messages
+        with each turn; the agent takes part in only some of them, and the rest would
+        otherwise be visible in this session and unknown from every other place. Each
+        message is kept once, under the audience rules of the room it was said in."""
+        added = 0
+        people = json.dumps(sorted(set(scene.people.values())))
+        for source_id, who, text, at in scene.overheard:
+            if self.store.one("SELECT 1 FROM journal WHERE source_id=?", (source_id,)):
+                continue
+            person = self.resolve(who)
+            row_id = self.store.run(
+                "INSERT INTO journal(ts,session,surface,place,place_label,thread,audience,actor,actor_name,people,mode,heard,said,did,stop,source_id) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (at if 0 < at <= now() else now(), scene.session, scene.surface, scene.place, scene.place_label, scene.thread, scene.audience,
+                 person, self.name_of(person), people, "overheard", text, "", "", "", source_id),
+            )
+            self.store.run("INSERT INTO journal_fts(rowid,heard,said) VALUES(?,?,?)", (row_id, text, ""))
+            added += 1
+        return added
 
     def _journal_filter(self, scene: Scene, asked: bool = False) -> tuple[str, list[Any]]:
         if scene.audience == "owner":
@@ -388,7 +412,7 @@ class Memory:
         return f"(place=? OR ({shared} AND {guard}))", [scene.place, *args, *guard_args]
 
     def last_here(self, scene: Scene) -> dict[str, Any] | None:
-        row = self.store.one("SELECT ts, heard, said FROM journal WHERE place=? ORDER BY ts DESC LIMIT 1", (scene.place,))
+        row = self.store.one("SELECT ts, heard, said FROM journal WHERE place=? AND COALESCE(mode,'')!='overheard' ORDER BY ts DESC LIMIT 1", (scene.place,))
         return dict(row) if row else None
 
     def elsewhere(self, scene: Scene, limit: int = 5, since_hours: float = 72) -> list[dict[str, Any]]:
@@ -398,7 +422,7 @@ class Memory:
         if scene.audience == "owner":
             rows = self.store.q(
                 "SELECT ts,surface,place_label,actor_name,heard,said,audience FROM journal "
-                f"WHERE place!=? AND audience!='dm' AND {guard} AND ts>? AND (said!='' OR heard!='') ORDER BY ts DESC LIMIT ?",
+                f"WHERE place!=? AND audience!='dm' AND COALESCE(mode,'')!='overheard' AND {guard} AND ts>? AND (said!='' OR heard!='') ORDER BY ts DESC LIMIT ?",
                 (scene.place, *guard_args, cutoff, limit),
             )
             return [dict(r) for r in rows]
@@ -409,7 +433,7 @@ class Memory:
         said = "said" if self.policy == "overlap" else "''"
         rows = self.store.q(
             f"SELECT ts,surface,place_label,actor_name,heard,{said} AS said,audience,people FROM journal "
-            f"WHERE place!=? AND {shared} AND {guard} AND ts>? AND (heard!='' OR said!='') ORDER BY ts DESC LIMIT ?",
+            f"WHERE place!=? AND COALESCE(mode,'')!='overheard' AND {shared} AND {guard} AND ts>? AND (heard!='' OR said!='') ORDER BY ts DESC LIMIT ?",
             (scene.place, *args, *guard_args, cutoff, min(limit, 3)),
         )
         return [dict(r) | {"with": self.who_was_there(scene, r["people"])} for r in rows]

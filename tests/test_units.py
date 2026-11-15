@@ -120,6 +120,38 @@ def scene_for(memory: Memory, place: str, audience: str, who: Who | None, others
     return scene
 
 
+def test_what_else_was_said_in_a_room_is_kept_once_and_can_be_recalled_elsewhere(memory: Memory):
+    history = [{"ts": "100.1", "sender": "U1", "bot": False, "text": "the venue is confirmed for the ninth", "deleted": False},
+               {"ts": "100.2", "sender": "UBOT", "bot": True, "text": "my own earlier message", "deleted": False},
+               {"ts": "100.3", "sender": "U9", "bot": False, "text": "this one was deleted", "deleted": True},
+               {"ts": "100.4", "sender": "U2", "bot": False, "text": "where are we on the invite?", "deleted": False}]
+    people = [{"id": "U1", "name": "Maya", "is_bot": False}, {"id": "U2", "name": "Dana", "is_bot": False}, {"id": "UBOT", "name": "Polaris", "is_bot": True}]
+    block = slack_block(channel="CPLAN", sender="U2", text="where are we on the invite?", history=history, participants_from_slack=people)
+    block["text"] = block["text"].replace('"text": "where are we on the invite?", "bot": false}', '"text": "where are we on the invite?", "bot": false, "ts": "100.4"}', 1)
+    scene = surfaces.read("s1", [block])
+    assert scene.source_id == "slack:T1:CPLAN:100.4"
+    assert [(i, w.handle, t) for i, w, t, _ in scene.overheard] == [("slack:T1:CPLAN:100.1", "U1", "the venue is confirmed for the ninth")]
+    memory.settle(scene)
+    assert memory.overhear(scene) == 1 and memory.overhear(scene) == 0  # kept once
+    memory.journal_add(scene, "Still missing the room.", "", "end_turn")
+    # the next turn's history shows the earlier trigger again: it is not kept a second time
+    later = surfaces.read("s1", [block])
+    later.source_id = "slack:T1:CPLAN:100.9"
+    later.overheard.append(("slack:T1:CPLAN:100.4", Who("slack:T1", "U2", "Dana"), "where are we on the invite?", 100.4))
+    memory.settle(later)
+    assert memory.overhear(later) == 0
+    assert memory.store.one("SELECT count(*) AS n FROM journal")["n"] == 2
+    assert memory.last_here(scene)["said"] == "Still missing the room."  # the brief's "last here" is the agent's own turn
+    # another room where Maya is present: an explicit lookup finds what she said, the unasked brief does not list it
+    other = scene_for(memory, "slack:T1:CSDK", "group", Who("slack:T1", "U7", "Eli"), [Who("slack:T1", "U1", "Maya")])
+    hits = memory.search(other, "venue confirmed ninth")
+    assert [h["who"] for h in hits] == ["Maya"] and "venue is confirmed" in hits[0]["heard"]
+    assert all("venue" not in (row["heard"] or "") for row in memory.elsewhere(other))
+    # a room with nobody in common still sees nothing
+    stranger = scene_for(memory, "slack:T1:COTH", "group", Who("slack:T1", "U8", "Rae"))
+    assert memory.search(stranger, "venue confirmed ninth") == []
+
+
 def test_input_during_a_turn_keeps_the_words_and_drops_the_wrapping():
     reference = {"type": "text", "text": "[Original input reference]\nsource_input_id: \"minecraft-abc\"\nThis is a reference, not work acceptance.\n[/Original input reference]",
                  "_meta": {"io.github.bkrabach.agent-instance": {"context": True}}}

@@ -58,6 +58,12 @@ class Scene:
     identity_name: str | None = None
     self_handle: str | None = None
     wake: str | None = None
+    #: The source's own id for the message that started this turn, when it has one.
+    source_id: str | None = None
+    #: Other messages the experience showed with this turn that the agent did not take
+    #: part in: (source id, who, text, source time or 0). Memory keeps them, so a room's
+    #: history is the same from every place the agent later looks from.
+    overheard: list[tuple[str, Who, str, float]] = field(default_factory=list)
     #: How much of the recent conversation is the agent's own: (its messages, messages
     #: counted, messages since it last spoke or None).
     share: tuple[int, int, int | None] | None = None
@@ -147,6 +153,20 @@ def _slack(scene: Scene, text: str) -> bool:
     if sender and sender != scene.self_handle:
         scene.actor = Who(namespace, sender, names.get(sender, ""), bool(trigger.get("bot")))
     scene.heard = str(trigger.get("text") or "")
+    prefix = f"{namespace}:{channel}:"
+    if trigger.get("ts"):
+        scene.source_id = prefix + str(trigger["ts"])
+    for message in (data.get("history") or [])[-60:]:
+        if not isinstance(message, dict) or message.get("deleted") or not message.get("ts") or not str(message.get("text") or "").strip():
+            continue
+        who = str(message.get("sender") or "")
+        if not who or who == scene.self_handle or prefix + str(message["ts"]) == scene.source_id:
+            continue
+        try:
+            at = float(message["ts"])
+        except (TypeError, ValueError):
+            at = 0.0
+        scene.overheard.append((prefix + str(message["ts"]), Who(namespace, who, names.get(who, ""), bool(message.get("bot"))), str(message["text"])[:4000], at))
     recent = [m for m in (data.get("history") or [])[-12:] if isinstance(m, dict) and not m.get("deleted")]
     if scene.self_handle and len(recent) >= 4:
         mine = [i for i, m in enumerate(recent) if m.get("sender") == scene.self_handle]
@@ -251,6 +271,15 @@ def _minecraft(scene: Scene, texts: list[str]) -> bool:
         if name and source in ("human", "agent"):
             scene.actor = Who(namespace, name, name, source == "agent")
         scene.heard = str(last.get("message") or "")
+        if last.get("id"):
+            scene.source_id = f"minecraft:{last['id']}"
+        for message in messages[:-1][-40:]:
+            who, text = str(message.get("username") or ""), str(message.get("message") or "")
+            if not message.get("id") or not who or who == scene.self_handle or not text.strip() or message.get("whisper"):
+                continue
+            if str(message.get("source") or "human") not in ("human", "agent"):
+                continue
+            scene.overheard.append((f"minecraft:{message['id']}", Who(namespace, who, who, message.get("source") == "agent"), text[:4000], 0.0))
         if all(m.get("whisper") for m in messages):
             scene.audience = "dm"
         origin = last.get("installation_source")

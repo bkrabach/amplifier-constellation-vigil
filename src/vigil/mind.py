@@ -396,6 +396,7 @@ class Mind:
         scene = surfaces.read(sid, blocks, meta)
         self.memory.settle(scene)
         self._label(scene)
+        self.memory.overhear(scene)
         self.scenes[sid] = scene
         turn = self.turns[sid] = Turn()
         event = self.store.event_begin("prompt", sid, scene.place, {"surface": scene.surface, "mode": scene.mode, "audience": scene.audience})
@@ -764,7 +765,7 @@ class Mind:
     async def dream(self) -> dict[str, Any]:
         """Consolidate recent journal entries into notes. A decision model first picks
         the entries worth the main model's attention, in one batched request."""
-        rows = self.store.q("SELECT * FROM journal WHERE consolidated=0 AND ts>? AND (heard!='' OR said!='') ORDER BY ts LIMIT 96", (now() - 3 * 86400,))
+        rows = self.store.q("SELECT * FROM journal WHERE consolidated=0 AND COALESCE(mode,'')!='overheard' AND ts>? AND (heard!='' OR said!='') ORDER BY ts LIMIT 96", (now() - 3 * 86400,))
         if not rows:
             return {"entries": 0, "kept": 0}
         kept = []
