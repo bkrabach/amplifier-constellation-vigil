@@ -40,7 +40,7 @@ Slack · Minecraft · Companion · Conversations · Observatory · any ACP clien
 Run as the OS user who owns the agent.
 
 ```bash
-bash install.sh --name Polaris --owner-name Brian \
+bash install.sh --name Polaris --owner-name Ada \
   --workspace "$HOME/.local/share/agent-instance/polaris/workspace" \
   --identity slack:T0123456=U0ABCDEF
 ```

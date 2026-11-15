@@ -90,14 +90,14 @@ def test_conversations_room_and_companion_call():
 
 
 def test_minecraft_scene():
-    world = {"messages": [{"id": 1, "username": "Paradox921", "message": "Polaris come build with me", "whisper": False, "source": "human"}],
-             "world": {"username": "Polaris", "players": ["Paradox921", "Maker", "Polaris"]}}
+    world = {"messages": [{"id": 1, "username": "Steve42", "message": "Polaris come build with me", "whisper": False, "source": "human"}],
+             "world": {"username": "Polaris", "players": ["Steve42", "Maker", "Polaris"]}}
     blocks = [{"type": "text", "text": "Current adapter permission policy for this turn:\n{}"},
               {"type": "text", "text": "You are a survival player.\nCONVERSATION-ONLY TURN: reply.\n" + json.dumps(world)}]
     scene = surfaces.read("s", blocks)
     assert (scene.surface, scene.audience, scene.self_handle) == ("minecraft", "group", "Polaris")
-    assert scene.actor == Who("minecraft", "Paradox921", "Paradox921", False) and scene.heard == "Polaris come build with me"
-    assert [w.handle for w in scene.participants] == ["Paradox921", "Maker"]
+    assert scene.actor == Who("minecraft", "Steve42", "Steve42", False) and scene.heard == "Polaris come build with me"
+    assert [w.handle for w in scene.participants] == ["Steve42", "Maker"]
 
 
 # ---- audiences ---------------------------------------------------------------------
