@@ -143,6 +143,8 @@ label = "the Minecraft world"
 
 During a Companion call, a decision model judges whether each remark is about the game. If it is, Vigil passes the caller's exact words to the body through the adapter's installation-caller interface and speaks the reply.
 
+The other direction, the agent noticing what happens in the world while you talk, is Conversations' own feature and needs no Vigil code: add a read-only observer for the agent's body to that installation's `companion-awareness.json` (see *Read-only observers* in the Conversations Companion guide). The observer's configuration is three fields: the body's home, a connection id, and the player name.
+
 ## Operate
 
 | Command | What it shows or does |
