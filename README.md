@@ -26,13 +26,15 @@ Slack · Minecraft · Companion · Conversations · Observatory · any ACP clien
 ## What it adds
 
 - **One entity everywhere.** Every turn starts with a short *presence brief*: where the agent is, who is speaking, what it knows about them, what it was doing elsewhere, and what it promised to bring up. The agent in a Companion call knows what it said in Slack an hour ago.
-- **Audience-scoped memory.** A memory is shown only to an audience that could already have known it. Owner-private notes stay out of group channels. A private message from someone else never leaves that conversation. See [the design](docs/DESIGN.md#audiences).
+- **Memory that travels with people.** Something said in a shared space can surface in another place when someone present there was part of it, the way a colleague on two sub-teams carries context between them. A private exchange never leaves the relationship it happened in, not even for the owner. See [the design](docs/DESIGN.md#audiences).
+- **A good teammate in a room.** The standing guidance covers when to speak without being asked, when to stay quiet, how to notice what is falling through, and how to lead only as far as a gap requires. `tests/etiquette` plays scripted team conversations to check it.
 - **People, not handles.** The same human has a different id in each Slack workspace, in Minecraft and in Conversations. Vigil links them, and only on evidence a surface can vouch for.
 - **Follow-through.** `mind_follow_up` holds a thought until it is due and then delivers it where it can be heard: by waking the Slack conversation, or the next time that person talks to the agent anywhere suitable.
 - **Background work.** `mind_delegate` runs a longer task in a session of the agent's own, checks that it really finished, and brings the report back to the conversation that asked.
 - **Reflexes from typed decision models.** Small, fast, non-generative models decide how hard to think, whether memory is worth reading, which journal entries deserve consolidation and whether unattended work is done. A wake-up with nothing to deliver costs no model call at all.
 - **Every provider the native engine supports.** The default runtime *is* the Constellation native engine, so OpenAI, Azure OpenAI, Anthropic, Gemini, Ollama, vLLM, Chat Completions, LiteLLM and GitHub Copilot all work, and new ones arrive with an engine update. Standing instructions are adjusted per model family, following each vendor's prompting guidance.
 - **Any ACP agent as a runtime.** Codex, Claude Agent, Gemini CLI or anything else that speaks ACP can be the main runtime or take delegated work.
+- **Voice that reaches the game.** With a bridge configured, a spoken request about the game goes straight to the agent's own player in that world, and the player's reply is the spoken answer: one model turn instead of two sessions relaying to each other.
 - **Degrades instead of going dark.** If the daemon is down, `vigil acp` runs the runtime directly. The agent still answers, without its mind, until the daemon returns.
 
 ## Install
@@ -119,7 +121,27 @@ main = "native"        # the runtime conversations use
 background = "codex"   # the runtime delegated work uses
 ```
 
-The agent can also choose per task: `mind_delegate` takes an optional `runtime`. A runtime gets the mind tools if it accepts HTTP MCP servers at session setup.
+The agent can also choose per task: `mind_delegate` takes an optional `runtime`. A runtime gets the mind tools if it accepts HTTP MCP servers at session setup. If a runtime asks to authenticate and the credential comes from `secret_env`, name the method (`auth_method = "api-key"` for Codex) and Vigil completes that step itself.
+
+Checked with `tests/runtime_matrix.py` (turn, brief, mind tool, recall in a new session, reload):
+
+| Runtime | Result |
+| --- | --- |
+| Native engine: Anthropic (Opus, Sonnet, Haiku), OpenAI (Sol, Astra), Gemini (Flash) | all five checks pass |
+| Claude Agent ACP, Codex ACP, OpenCode, Copilot CLI | all five checks pass |
+| Gemini CLI | answers and reads the brief; its tool turn timed out |
+| Native engine `chat-completions` against api.openai.com | HTTP 400 from the endpoint; not yet diagnosed |
+
+### A bridge from voice to the game
+
+```toml
+[bridges.minecraft]
+url = "http://127.0.0.1:52731"     # the agent's own Minecraft body
+secret = "minecraft-caller"        # an installation-caller token configured on that body
+label = "the Minecraft world"
+```
+
+During a Companion call, a decision model judges whether each remark is about the game. If it is, Vigil passes the caller's exact words to the body through the adapter's installation-caller interface and speaks the reply.
 
 ## Operate
 
@@ -138,7 +160,7 @@ Logs are in `logs/` under the home: `vigil.log` for the daemon, `shim.log` for b
 ## Limits to know about
 
 - **Experiences decide when the agent may speak.** No Constellation experience lets an agent post on its own. Vigil reaches a quiet Slack conversation by chaining the connector's follow-up tool (at most an hour per hop, each hop free of model calls). In other places a held thought is delivered the next time that person speaks to the agent.
-- **A group audience never sees detail from another room.** It sees one-line hints that the agent and the person now speaking have talked elsewhere, and only if their accounts are linked.
+- **Shared memory needs someone in common.** A shared-space memory surfaces in another place only when a person present was part of it, which across surfaces requires their accounts to be linked. `mind.cross_space = "hints"` or `"strict"` narrows this.
 - **Runtime 0.15.7 and Anthropic.** That release fails a turn when a tool is called with no arguments. Vigil's own tools always take one. For tools from experiences, either run a runtime that includes the fix in `ops/patches/`, or use another provider.
 - **Session options.** Per-turn effort selection applies to runtimes that expose a `thought_level` session option, which the native engine does.
 
@@ -149,6 +171,10 @@ uv venv && uv pip install -e . pytest ruff
 .venv/bin/python -m pytest          # unit tests and an end-to-end conductor test against a scripted runtime
 .venv/bin/python tests/drive.py --home HOME "hello"                      # act as an experience
 .venv/bin/python tests/drive.py --home HOME --slack C123:U999:Dana "hi"  # a Slack-shaped turn
+.venv/bin/python tests/runtime_matrix.py tests/runtime_matrix.example.json  # the same scenario across runtimes
+.venv/bin/python tests/etiquette/room.py tests/etiquette/scenarios.json --attach "agent-instance acp --home INSTANCE" --cwd WORKSPACE
 ```
+
+The etiquette tools talk to a live agent through an Instance and spend model calls. Point them at a throwaway Instance so the scripted conversations do not become the real agent's memories.
 
 See [docs/DESIGN.md](docs/DESIGN.md) for how it works and why.
