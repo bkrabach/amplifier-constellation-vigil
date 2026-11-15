@@ -81,6 +81,9 @@ def compose(scene: Scene, memory: Memory, config: Config, extras: dict[str, Any]
     lines.append(here)
     if scene.surface == "minecraft" and scene.mode != "ambient":
         lines.append("People in the game are standing next to you in real time. Before something that takes more than a few seconds, say a word first so they know you are on it.")
+    if scene.surface == "minecraft" and scene.audience == "group":
+        lines.append("Your reply here is spoken in public chat unless you already used a chat tool this turn. Write it as speech to the players, "
+                     "or leave it empty when nothing needs saying. It is never a place for notes about what you decided or did not do.")
 
     # People present, with what may be known about them here.
     people_lines = []

@@ -317,6 +317,16 @@ def test_only_a_real_mind_tool_request_is_approved_automatically():
     assert _own_tool({"title": "", "kind": "other"}) is None and _own_tool({}) is None
 
 
+def test_brief_says_a_game_reply_is_spoken_aloud(memory: Memory):
+    game = scene_for(memory, "minecraft:world", "group", Who("minecraft", "Wren", "Wren"))
+    text, _ = compose(game, memory, memory.config, {})
+    assert "spoken in public chat" in text and "leave it empty" in text
+    whisper = scene_for(memory, "minecraft:world", "dm", Who("minecraft", "Wren", "Wren"))
+    assert "spoken in public chat" not in compose(whisper, memory, memory.config, {})[0]
+    channel = scene_for(memory, "slack:T1:C1", "group", Who("slack:T1", "U2", "Dana"))
+    assert "spoken in public chat" not in compose(channel, memory, memory.config, {})[0]
+
+
 def test_spoken():
     assert spoken('{"decision":"pass","reason":"x"}') == "" and spoken("[[PASS]]") == ""
     assert spoken('{"decision":"speak","text":"Ship it."}') == "Ship it."
