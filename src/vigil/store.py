@@ -83,6 +83,10 @@ class Store:
         self.db.executescript(SCHEMA)
         if "tools_seen" not in {row["name"] for row in self.q("PRAGMA table_info(sessions)")}:
             self.run("ALTER TABLE sessions ADD COLUMN tools_seen REAL")
+        if not self.meta_get("tools_seen_backfilled"):
+            # Sessions from before this was recorded are unknown, not broken.
+            self.run("UPDATE sessions SET tools_seen=COALESCE(tools_seen, updated, created) WHERE turns>=1")
+            self.meta_set("tools_seen_backfilled", "1")
 
     def close(self) -> None:
         self.db.close()
