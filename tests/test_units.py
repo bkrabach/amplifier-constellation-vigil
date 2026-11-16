@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from vigil import decisions, surfaces
+from vigil import decisions, engine, prompts, surfaces
 from vigil.brief import CLOSE, OPEN, ReplayFilter, compose
 from vigil.config import Config, DecisionBackend
 from vigil.memory import Memory
@@ -511,3 +511,15 @@ def test_a_home_whose_socket_path_cannot_exist_is_refused(tmp_path: Path):
     exact = Path("/" + "b" * (SOCKET_PATH_LIMIT - len("/run/vigil.sock") - 1))
     assert len(str(socket_path(exact))) == SOCKET_PATH_LIMIT and socket_path_problem(exact) is None
     assert socket_path_problem(Path(str(exact) + "c")) is not None
+
+
+def test_the_default_engine_is_pinned_for_both_linux_platforms():
+    pins = engine.RELEASES[engine.DEFAULT_VERSION]
+    assert set(pins) == {"linux-aarch64", "linux-x86_64"}
+    for entry in pins.values():
+        assert all(len(entry[key]) == 64 for key in ("asset_sha256", "binary_sha256"))
+
+
+def test_the_standing_instructions_say_what_the_agent_runs_on():
+    text = prompts.instructions("claude-opus-5-5")
+    assert "core, Vigil," in text and "Constellation native runtime (not the Amplifier CLI)" in text
