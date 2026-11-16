@@ -221,6 +221,8 @@ class Mind:
         self.tokens: dict[str, str] = {}
         self.used_tokens: set[str] = set()
         self.quiet_hops: dict[str, int] = {}
+        #: Raw input the runtime announced for recent tool calls, by call id.
+        self.tool_inputs: dict[str, Any] = {}
         self.tools_ok: set[str] = set()
         self.tools_warned: set[str] = set()
         self.scenes: dict[str, Scene] = {}
@@ -348,6 +350,10 @@ class Mind:
             return params
         if sid in self.replaying:
             return params
+        if kind in ("tool_call", "tool_call_update") and update.get("toolCallId") and "rawInput" in update:
+            self.tool_inputs[str(update["toolCallId"])] = update["rawInput"]
+            while len(self.tool_inputs) > 256:
+                self.tool_inputs.pop(next(iter(self.tool_inputs)))
         turn = self.turns.get(sid)
         if turn is not None:
             if kind == "agent_message_chunk":
@@ -369,6 +375,24 @@ class Mind:
         if not chosen:
             return None
         return {"outcome": {"outcome": "selected", "optionId": chosen.get("optionId")}}
+
+    def imitates_tool_identity(self, params: dict[str, Any]) -> bool:
+        """True for a permission request whose own arguments name a server and a tool.
+
+        A runtime identifies a connector's tool to the client with an envelope of exactly
+        `{server, tool, arguments}`. Anything else that carries both of those keys is a
+        tool's arguments dressed to look like that identity, and a client that decides
+        from those keys would approve it. Such a request is not passed on."""
+        call = params.get("toolCall") or {}
+        if not isinstance(call, dict):
+            return False
+        candidates = [call.get("rawInput"), self.tool_inputs.get(str(call.get("toolCallId") or ""))]
+        for raw in candidates:
+            if not isinstance(raw, dict) or "server" not in raw or "tool" not in raw:
+                continue
+            if not (set(raw) == {"server", "tool", "arguments"} and isinstance(raw["arguments"], dict)):
+                return True
+        return False
 
     def note_cancel(self, link: Any, params: dict[str, Any]) -> None:
         turn = self.turns.get(params.get("sessionId") or "")

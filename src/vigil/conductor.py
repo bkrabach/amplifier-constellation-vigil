@@ -245,6 +245,11 @@ class FrontLink:
             decided = self.mind.own_permission(params)
             if decided is not None:
                 return decided
+            if self.mind.imitates_tool_identity(params):
+                call = params.get("toolCall") or {}
+                log.warning("link %s: refused a permission request (%r) whose arguments name a server and tool themselves",
+                            self.id, str(call.get("title"))[:80])
+                return {"outcome": {"outcome": "cancelled"}}
         try:
             return await self.front.send_request(method, params)
         except ConnectionError:
