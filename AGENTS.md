@@ -47,6 +47,10 @@ The product page (`site/`, published at <https://bkrabach.github.io/amplifier-co
 
 A restart waits up to `server.drain_seconds` (45 by default) for running turns to finish, and `vigil status` shows how many are running. A turn longer than that is cut off. For a game connection that means unsettled effects, and the connector then pauses the agent's work there until someone reviews it. Look before you restart, and do not redeploy in the middle of a session you are testing.
 
+`vigil status --json` gives `running_turns` and `attached` for a script that has to decide. Nothing holds new turns back, so the check and the restart are not atomic. While the daemon is down the bridge runs the runtime directly: that turn is answered without memory and is not journaled, and `logs/shim.log` records each one, so read it after a restart.
+
+To see which engine a live agent really runs, without a session or a model call, attach as a client would and negotiate only: start `vigil acp --home HOME`, send ACP `initialize`, and hash `/proc/<pid>/exe` of the `agent-runtime` child the daemon started for that attachment. `_meta["dev.vigil"].runtimeAgentInfo.version` in the reply is the engine's own version. No engine process stays up while the agent is idle.
+
 ## When a runtime misbehaves
 
 Do not guess. Run it through `tests/runtime_matrix.py --only NAME --keep` and read `logs/vigil.log` in the kept home: the trace shows whether the runtime opened the mind's tool server and what it asked permission for. A runtime that never calls `tools/list` has no mind tools, whatever it advertised. The matrix refuses every permission request that is not for a mind tool; keep it that way, because a model without its tools will otherwise explore the machine.
