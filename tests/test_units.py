@@ -523,3 +523,14 @@ def test_the_default_engine_is_pinned_for_both_linux_platforms():
 def test_the_standing_instructions_say_what_the_agent_runs_on():
     text = prompts.instructions("claude-opus-5-5")
     assert "core, Vigil," in text and "Constellation native runtime (not the Amplifier CLI)" in text
+
+
+def test_the_bridge_runs_with_the_home_on_either_side_of_acp(monkeypatch):
+    from vigil import cli, shim
+
+    homes = []
+    monkeypatch.setattr(shim, "main", homes.append)
+    for argv in (["vigil", "acp", "--home", "/h"], ["vigil", "--home", "/h", "acp"]):
+        monkeypatch.setattr("sys.argv", argv)
+        cli.main()
+    assert homes == ["/h", "/h"]

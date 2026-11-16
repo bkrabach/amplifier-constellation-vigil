@@ -320,8 +320,9 @@ def main() -> None:
     p = sub.add_parser("serve", help="run the always-on daemon")
     p.set_defaults(func=lambda a: __import__("vigil.daemon", fromlist=["serve"]).serve(a.home))
 
+    # `vigil acp ...` takes the fast path at the top of main(). This is `vigil --home H acp`.
     p = sub.add_parser("acp", help="ACP stdio bridge for an Agent Instance backend")
-    p.set_defaults(func=lambda a: None)
+    p.set_defaults(func=lambda a: __import__("vigil.shim", fromlist=["main"]).main(a.home))
 
     p = sub.add_parser("status", help="what the daemon is doing")
     p.add_argument("--json", action="store_true")
