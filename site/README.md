@@ -52,6 +52,25 @@ GitHub Pages (publishing source: GitHub Actions). Only `_site` is deployed.
 
 3. Update the "Where this fits" block in the README and any sentence on the page that
    the change makes untrue, then build and look at the page at desktop and phone widths.
+4. Send the same record to the Constellation registry. Vigil is listed there as an
+   independent project, and the project directory at
+   <https://microsoft.github.io/amplifier-constellation/projects/> is generated from
+   that entry. In the `microsoft/amplifier-constellation` checkout, replace Vigil's
+   entry in `docs/ecosystem/registry.json` with the record, regenerate, and confirm
+   that what the registry would hand back equals the files here:
+
+   ```sh
+   python3 scripts/render_ecosystem_maps.py --root .
+   python3 scripts/render_ecosystem_maps.py --root . --check
+   python3 scripts/render_ecosystem_maps.py --root . --staging /tmp/registry-views
+   cmp /tmp/registry-views/amplifier-constellation-vigil/docs/ecosystem-map.json /path/to/vigil/docs/ecosystem-map.json
+   cmp /tmp/registry-views/amplifier-constellation-vigil/docs/ecosystem-map.svg /path/to/vigil/docs/ecosystem-map.svg
+   ```
+
+   Open a pull request there; that repository's owners decide whether to merge it.
+   Keep the purpose line's statement that Vigil is independent: the directory shows
+   only the name and that line. Until the pull request merges, the directory and
+   this repository disagree, so do not leave it open.
 
 ## What the page may claim
 
