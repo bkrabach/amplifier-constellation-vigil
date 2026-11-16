@@ -8,6 +8,8 @@ To the Instance, Vigil is an ordinary ACP agent. Nothing in any experience chang
 
 The [product page](https://bkrabach.github.io/amplifier-constellation-vigil/) introduces it in a few minutes, with a map of where it fits.
 
+Vigil is an independent open-source project. It works with the Constellation components but is not one of them; it is maintained in this repository.
+
 ```
 Slack · Minecraft · Companion · Conversations · Observatory · any ACP client
                          │  ACP (unchanged)
