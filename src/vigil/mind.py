@@ -425,10 +425,10 @@ class Mind:
         scene = self.scenes.get(sid)
         if scene is None:
             return
-        added = surfaces.steering_heard(params.get("prompt") or [])
+        names = {who.handle: who.name for who in [*scene.participants, scene.actor] if who and who.name}
+        added = surfaces.steering_heard(params.get("prompt") or [], names)
         if added:
-            # Keep the newest words when a long turn collects many updates.
-            scene.heard = (scene.heard + "\n" + added)[-4000:]
+            scene.heard = surfaces.with_updates(scene.heard, added)
 
     # ---- a turn --------------------------------------------------------------------
     async def prompt(self, link: Any, params: dict[str, Any]) -> Any:

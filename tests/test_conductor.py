@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import socket
 import sys
 from pathlib import Path
 
@@ -15,6 +16,14 @@ from vigil.config import Config
 from vigil.daemon import Daemon
 
 HERE = Path(__file__).parent
+
+
+def free_port() -> int:
+    """A loopback port nothing holds right now. A fixed number collides with other
+    programs' outgoing connections on a busy machine."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 def make_home(tmp_path: Path, port: int, extra: str = "") -> Config:
@@ -78,10 +87,10 @@ class Client:
 
 
 @pytest.fixture
-def run(tmp_path, unused_tcp_port_factory=None):
-    def runner(scenario, port=47930, extra=""):
+def run(tmp_path):
+    def runner(scenario, extra=""):
         async def body():
-            config = make_home(tmp_path, port, extra)
+            config = make_home(tmp_path, free_port(), extra)
             daemon = Daemon(config)
             task = asyncio.create_task(daemon.run())
             for _ in range(100):
@@ -155,7 +164,7 @@ def test_a_runtime_that_never_opens_the_tools_is_told_so(run):
         assert all(TOOLS_MISSING not in text for text in briefs["opened"])
         assert daemon.store.one("SELECT count(*) AS n FROM sessions WHERE turns>=1 AND tools_seen IS NULL")["n"] == 1
         await client.close()
-    run(scenario, port=47937)
+    run(scenario)
 
 
 def test_a_restart_waits_for_a_running_turn(run):
@@ -171,7 +180,7 @@ def test_a_restart_waits_for_a_running_turn(run):
         # the turn finished and reached the client before the daemon closed the connection
         assert result["stopReason"] == "end_turn" and client.text().endswith("done")
         assert daemon.store.one("SELECT status FROM events ORDER BY id DESC LIMIT 1")["status"] == "done"
-    run(scenario, port=47938)
+    run(scenario)
 
 
 def test_permissions_own_tools_only(run):
@@ -200,7 +209,7 @@ def test_a_request_dressed_as_a_connector_tool_never_reaches_the_client(run):
         assert "dressed=cancelled" in client.text() and "other=no" in client.text()
         assert [p["toolCall"]["toolCallId"] for p in client.permissions] == ["t2"]
         await client.close()
-    run(scenario, port=47939)
+    run(scenario)
 
 
 def test_reload_hides_brief_and_pass_is_silence(run):
@@ -271,6 +280,7 @@ def test_spoken_game_request_goes_straight_to_the_game(run):
     from aiohttp import web
 
     seen: dict = {}
+    bridge_port = free_port()
 
     async def task(request):
         seen["task"] = await request.json()
@@ -287,7 +297,7 @@ def test_spoken_game_request_goes_straight_to_the_game(run):
         app.add_routes([web.post("/task", task), web.post("/source-outcomes", outcomes)])
         runner = web.AppRunner(app)
         await runner.setup()
-        await web.TCPSite(runner, "127.0.0.1", 47931).start()
+        await web.TCPSite(runner, "127.0.0.1", bridge_port).start()
         try:
             client = Client()
             await client.attach(config)
@@ -309,9 +319,9 @@ def test_spoken_game_request_goes_straight_to_the_game(run):
         finally:
             await runner.cleanup()
 
-    run(scenario, extra='''
+    run(scenario, extra=f'''
 [bridges.minecraft]
-url = "http://127.0.0.1:47931"
+url = "http://127.0.0.1:{bridge_port}"
 secret = "mc-caller"
 wait_seconds = 5
 ''')
