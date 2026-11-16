@@ -29,7 +29,19 @@ REPOSITORY = "microsoft/amplifier-constellation-runtime"
 #: Pinned releases. Hashes are the ones each release publishes in its `SHA256SUMS` and
 #: per-package manifest. From 0.15.8 the engine states each tool's identity itself and
 #: checks a built-in tool's arguments against its schema before asking permission.
+#: From 0.15.9 a request for a tool name the session does not list gets an error for
+#: that call, and the model can ask again, instead of the whole turn failing.
 RELEASES: dict[str, dict[str, dict[str, str]]] = {
+    "0.15.9": {
+        "linux-aarch64": {
+            "asset_sha256": "ff7c2f4920d44a63bc0bb2a73fff10042a5183bc3631a79575f709c549c7c3bc",
+            "binary_sha256": "b71033c94664515a6df1003f3dde4d3fb4b5135c43ee58b525d26edd41be4313",
+        },
+        "linux-x86_64": {
+            "asset_sha256": "e255de44ab02ecb2877704294b63f10cda99bd05bc4b5fb5cd1a492f01685fd5",
+            "binary_sha256": "a03edd7de9f841acff9ee274e998059ef1ef1c51b57d16afadaa7decdb1d6845",
+        },
+    },
     "0.15.8": {
         "linux-aarch64": {
             "asset_sha256": "da83f8d2a13d55da29a080edec746f19f7a9e5cafecfd37f9a63ee915857770e",
@@ -51,7 +63,7 @@ RELEASES: dict[str, dict[str, dict[str, str]]] = {
         },
     },
 }
-DEFAULT_VERSION = "0.15.8"
+DEFAULT_VERSION = "0.15.9"
 
 #: Mind tools that change Vigil's own memory. The engine is told it may call them
 #: without asking, since nothing outside Vigil is affected.
