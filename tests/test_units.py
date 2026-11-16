@@ -498,3 +498,16 @@ def test_decision_wire_and_normalize():
     assert answers["effort"].value == "low" and answers["recall"].confidence == 0.8
     with pytest.raises(ValueError):
         decisions._normalize(jev, qs, {"answers": {"effort": {"type": "choice", "choice": "extreme"}, "recall": {"type": "noul", "noul": 0.5}}})
+
+
+def test_a_home_whose_socket_path_cannot_exist_is_refused(tmp_path: Path):
+    from vigil.config import SOCKET_PATH_LIMIT, socket_path, socket_path_problem
+
+    assert socket_path_problem(tmp_path) is None or len(str(socket_path(tmp_path))) > SOCKET_PATH_LIMIT
+    assert socket_path_problem(Path("/srv/agents/polaris")) is None
+    long_home = Path("/srv") / ("a" * SOCKET_PATH_LIMIT)
+    problem = socket_path_problem(long_home)
+    assert problem and str(SOCKET_PATH_LIMIT) in problem and "shorter" in problem
+    exact = Path("/" + "b" * (SOCKET_PATH_LIMIT - len("/run/vigil.sock") - 1))
+    assert len(str(socket_path(exact))) == SOCKET_PATH_LIMIT and socket_path_problem(exact) is None
+    assert socket_path_problem(Path(str(exact) + "c")) is not None

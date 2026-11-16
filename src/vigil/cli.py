@@ -75,9 +75,11 @@ def _q(value: str) -> str:
 
 
 def cmd_init(args: argparse.Namespace) -> None:
-    from .config import CONFIG_FILE, ensure_layout
+    from .config import CONFIG_FILE, ensure_layout, socket_path_problem
 
     home = Path(args.home).expanduser().resolve()
+    if problem := socket_path_problem(home):
+        sys.exit(problem)
     home.mkdir(mode=0o700, parents=True, exist_ok=True)
     ensure_layout(home)
     target = home / CONFIG_FILE

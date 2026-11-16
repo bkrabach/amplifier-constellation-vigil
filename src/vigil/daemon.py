@@ -21,7 +21,7 @@ from aiohttp import web
 from . import __version__, engine
 from .brief import local_now
 from .conductor import STREAM_LIMIT, FrontLink
-from .config import Config, ensure_layout
+from .config import Config, ensure_layout, socket_path_problem
 from .decisions import Decider
 from .mcp import McpServer
 from .memory import Memory
@@ -212,6 +212,8 @@ class Daemon:
 
 def serve(home: str) -> None:
     config = Config.load(home)
+    if problem := socket_path_problem(config.home):
+        raise SystemExit(problem)
     ensure_layout(config.home)
     handler = logging.handlers.RotatingFileHandler(config.log_dir / "vigil.log", maxBytes=8 * 1024 * 1024, backupCount=3)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s",
