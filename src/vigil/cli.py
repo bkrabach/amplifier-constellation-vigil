@@ -121,7 +121,7 @@ def cmd_engine(args: argparse.Namespace) -> None:
 
     config = Config.load(args.home)
     if args.action == "install":
-        print(f"Installed {engine.install(config, args.version, args.source, args.allow_unpinned)}")
+        print(f"Installed {engine.install(config, args.version or engine.DEFAULT_VERSION, args.source, args.allow_unpinned)}")
     elif args.action == "init":
         engine.init(config, args.rest)
         settings = engine.apply_settings(config)
@@ -310,7 +310,7 @@ def main() -> None:
 
     p = sub.add_parser("engine", help="install and configure the native runtime")
     p.add_argument("action", choices=["install", "init", "apply", "show"])
-    p.add_argument("--version", default="0.15.7")
+    p.add_argument("--version", help="a pinned runtime release; the default is the one this Vigil was tested with")
     p.add_argument("--source")
     p.add_argument("--allow-unpinned", action="store_true")
     p.set_defaults(func=cmd_engine, passthrough=True)
