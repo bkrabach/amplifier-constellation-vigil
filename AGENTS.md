@@ -30,6 +30,10 @@ Vigil is an always-on engine for a Constellation Agent Instance. Read [README.md
 - **Use declared interfaces only.** Do not read another component's files or secrets. Call an experience's tool through the descriptor it gave the session.
 - **Do not add a second social gate.** Whether to speak in a group is the Instance's attention decision.
 
+## Product page and ecosystem map
+
+The product page (`site/`, published at <https://bkrabach.github.io/amplifier-constellation-vigil/>) and the README's "Where this fits" block follow the [Constellation map guide](https://github.com/microsoft/amplifier-constellation/blob/main/docs/ecosystem-maps.md). `docs/ecosystem-map.json` is the one record of Vigil's role, parts and relationships; `docs/ecosystem-map.svg` and `docs/product/` are generated from it with that repository's renderer, and `site/build.py` fills the page's "Where it fits" facts from it. When a role, interface, part or dependency changes, edit the record, regenerate, and update the page and the README together; [site/README.md](site/README.md) has the commands. Map what the source does, keep limits beside promises, and never infer compatibility from a map. Vigil is not in the Constellation family registry; adding it there is that repository's owners' decision.
+
 ## Checks
 
 ```bash
