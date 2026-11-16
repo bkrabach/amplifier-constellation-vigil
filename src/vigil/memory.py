@@ -438,19 +438,21 @@ class Memory:
         )
         return [dict(r) | {"with": self.who_was_there(scene, r["people"])} for r in rows]
 
-    def search(self, scene: Scene, query: str, limit: int = 6) -> list[dict[str, Any]]:
+    def search(self, scene: Scene, query: str, limit: int = 6, asked: bool = True) -> list[dict[str, Any]]:
+        """``asked`` is True for a lookup the agent made itself. The recall that the
+        mind adds to a brief on its own passes False, so practice stays out of it."""
         match = _fts(query)
         if not match:
             return []
         hits: list[dict[str, Any]] = []
-        where, args = self._note_filter(scene, asked=True)
+        where, args = self._note_filter(scene, asked=asked)
         for row in self.store.q(
             f"SELECT n.id,n.subject,n.text,n.ts,n.place,n.audience FROM notes_fts f JOIN notes n ON n.id=f.rowid "
             f"WHERE notes_fts MATCH ? AND {where} ORDER BY bm25(notes_fts) LIMIT ?",
             (match, *args, limit),
         ):
             hits.append({"kind": "note", "id": row["id"], "subject": row["subject"], "text": row["text"], "ts": row["ts"]})
-        where, args = self._journal_filter(scene, asked=True)
+        where, args = self._journal_filter(scene, asked=asked)
         for row in self.store.q(
             f"SELECT j.id,j.ts,j.place,j.place_label,j.actor_name,j.heard,j.said,j.people FROM journal_fts f JOIN journal j ON j.id=f.rowid "
             f"WHERE journal_fts MATCH ? AND {where} ORDER BY bm25(journal_fts) LIMIT ?",

@@ -67,4 +67,12 @@ The engine's token threshold (`compact_threshold_tokens`) only applies from the 
 
 Rehearsals leave memories. Before driving a deployed agent with scripted people, list the test places under `mind.rehearsal_places` in its `vigil.toml` so nothing learned there reaches real work. Afterwards, `vigil memory forget --place <prefix> --people` shows what a clean-up would remove and `--apply` removes it. Do not edit the SQLite file by hand: the search indexes go stale.
 
+## Reviewing a voice call
+
+Vigil hears a call only at its hand-offs. Between them the Companion's voice answers by itself, and nothing said after the last hand-off reaches the agent. On a live call the caller said which game player they were, the voice acknowledged it, and the agent never heard it. So read the Companion's own records beside the journal. In the Companion's home, `state.sqlite3` holds `companion_delegations` (`request_text` is what the caller said for each hand-off) and `companion_events` (every speech fragment and hand-off with its time, and `playback` rows where the caller cut the voice off).
+
+The reader's `heard` for a hand-off must equal that `request_text` with line breaks as spaces. Check it on real prompts when the Companion changes: it once began sending the caller's words as a list of timed fragments, and the journal, the unasked recall and the words passed to the game all carried that JSON until the reader was taught the shape.
+
+The caller's wait is from their last word to the voice's first. On that call it was 12 and 19 seconds. About five seconds of each passed before the prompt reached Vigil: the Companion waits about two seconds for the transcript, and the request takes about three more to arrive. The rest is the model, so a large session or a turn with several tool calls is what the caller hears as silence.
+
 When a surface changes its prompt format, update its reader and its test together. When you learn something that would have saved you time, put it in this file.

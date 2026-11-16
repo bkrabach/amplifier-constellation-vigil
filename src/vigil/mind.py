@@ -463,7 +463,7 @@ class Mind:
                     return routed
             effort, recall = await self._triage(scene)
             if recall and scene.heard:
-                extras["recall"] = self.memory.search(scene, scene.heard, 4)
+                extras["recall"] = self.memory.search(scene, scene.heard, 4, asked=False)
             if scene.wake:
                 extras["lines"] = ["This turn exists because something you were holding is due. Deliver it now."]
             if self._tools_missing(sid, link.runtime):
@@ -529,6 +529,10 @@ class Mind:
             extras.setdefault("lines", []).append(
                 f"You already passed the caller's words to your own presence in {self.bridge.label}, and it is acting on them now. It has not replied yet. "
                 "Tell the caller in a few words that you are on it. Do not send the request again.")
+        elif result["state"] == "unavailable":
+            extras.setdefault("lines", []).append(
+                f"The caller's words sound like they are about {self.bridge.label}. Your own presence there could not be reached just now, so nothing was passed to it. "
+                "If they asked for something to happen there, tell them plainly that you cannot reach it at the moment. Do not say it is under way.")
         return None
 
     def _label(self, scene: Scene) -> None:

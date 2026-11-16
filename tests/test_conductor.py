@@ -325,3 +325,30 @@ url = "http://127.0.0.1:{bridge_port}"
 secret = "mc-caller"
 wait_seconds = 5
 ''')
+
+
+def test_spoken_game_request_says_so_when_the_game_presence_is_down(run):
+    """Nothing listens where the game presence should be. The call session answers, and
+    its brief says the words were not passed on, so the caller is not told it is under way."""
+    async def scenario(config, daemon):
+        config.write_secret("mc-caller", "t" * 40)
+        client = Client()
+        await client.attach(config)
+        sid = (await client.conn.send_request("session/new", {"cwd": config.workspace, "mcpServers": []}))["sessionId"]
+        call = ("The live voice conversation delegated help at 900ms. You are the same agent.\n\nThis new request's delegation_id is d1.\n\n"
+                "Current human source (exact):\ncan you bring me some torches, I am down in the cave\n\nRecent conversation, for references: none")
+        meta = {"com.microsoft.amplifier.conversations": {"conversationId": "call-1", "author": "olive", "messageId": "m"}}
+        result = await client.conn.send_request("session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": call}], "_meta": meta})
+        assert result["stopReason"] == "end_turn" and "routed" not in json.dumps(result)
+        prompts = json.loads((config.home / "fake-state.json").read_text())[sid]["prompts"]
+        assert len(prompts) == 1
+        brief = prompts[0][-1]["text"]
+        assert "could not be reached just now, so nothing was passed to it" in brief and "the Minecraft world" in brief
+        await client.close()
+
+    run(scenario, extra=f'''
+[bridges.minecraft]
+url = "http://127.0.0.1:{free_port()}"
+secret = "mc-caller"
+wait_seconds = 5
+''')

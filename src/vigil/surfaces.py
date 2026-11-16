@@ -99,6 +99,20 @@ def _json_tail(text: str, start: int) -> Any:
         return None
 
 
+def _caller_words(section: str) -> str:
+    """What the caller said, from a Companion request's "Current human source".
+
+    A current Companion gives that section as a JSON list of timed speech fragments
+    from both sides of the call. The caller's words are the user fragments, in order;
+    the rest is the voice's own speech and timing. An older Companion gives the words
+    as plain text, which is returned unchanged."""
+    data = _json_tail(section, 0) if section.startswith("[") else None
+    if not isinstance(data, list):
+        return section
+    words = [str(part.get("text") or "").strip() for part in data if isinstance(part, dict) and part.get("role") == "user"]
+    return " ".join(word for word in words if word)
+
+
 def _instance(scene: Scene, text: str) -> None:
     for line in text.splitlines()[1:4]:
         if line.startswith("Name: "):
@@ -215,7 +229,7 @@ def _conversations(scene: Scene, text: str, meta: dict[str, Any]) -> bool:
         at = text.find(mark)
         end = text.find("\n\nRecent conversation", at)
         if at >= 0:
-            scene.heard = text[text.find("\n", at) + 1 : end if end > at else at + 4000].strip()
+            scene.heard = _caller_words(text[text.find("\n", at) + 1 : end if end > at else at + 4000].strip())
         if author:
             scene.participants.append(Who(namespace, author, author))
         return True

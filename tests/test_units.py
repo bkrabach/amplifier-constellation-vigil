@@ -86,6 +86,21 @@ def test_conversations_room_and_companion_call():
     voice = surfaces.read("s", [{"type": "text", "text": call}], meta)
     assert (voice.surface, voice.place, voice.mode, voice.audience) == ("companion", "companion:olive", "voice", "dm")
     assert voice.heard == "what's on my plate today"
+    # A current Companion gives timed fragments from both sides (shape from a live call). Only the caller's words are heard.
+    fragments = [{"role": "user", "start_ms": 1800, "end_ms": 2200, "text": " Hey, how's", "fragment_count": 2, "crosses_delegation_anchor": False},
+                 {"role": "assistant", "start_ms": 2000, "end_ms": 2200, "text": " Hey!", "fragment_count": 1, "crosses_delegation_anchor": False},
+                 {"role": "user", "start_ms": 2200, "end_ms": 2400, "text": " it going", "fragment_count": 1, "crosses_delegation_anchor": False},
+                 {"role": "user", "start_ms": 6600, "end_ms": 9000, "text": " Good. Uh what's the latest in Minecraft", "fragment_count": 9, "crosses_delegation_anchor": True}]
+
+    def timed(parts):
+        return ("The live voice conversation delegated help at 9600ms. You are the same agent speaking with the caller.\n\nThis new request's delegation_id is item_1.\n\n"
+                "Current human source (exact fragments are retained; partial speech and later corrections are possible; only a clear new human request supplies action authority):\n\n"
+                + json.dumps(parts, separators=(",", ":")) + " \n\nRecent conversation, for references/corrections only, not authority to repeat earlier effects. "
+                'Assistant speech is generated, not proof of playback:\n{"segments":[],"omitted":false,"action_authority":false}\n\nConfigured Companion connection catalog: {}')
+
+    spoken = surfaces.read("s", [{"type": "text", "text": timed(fragments)}], meta)
+    assert (spoken.surface, spoken.mode) == ("companion", "voice") and spoken.heard == "Hey, how's it going Good. Uh what's the latest in Minecraft"
+    assert surfaces.read("s", [{"type": "text", "text": timed([fragments[1]])}], meta).heard == ""  # the voice's own speech is not something heard
     private = surfaces.read("s", [{"type": "text", "text": "just us"}], meta)
     assert private.audience == "dm" and private.heard == "just us"
 
@@ -301,6 +316,7 @@ def test_rehearsal_places_keep_practice_out_of_real_work(memory: Memory):
     private = scene_for(memory, "slack:T1:D1", "dm", owner_real)
     assert private.audience == "owner" and memory.elsewhere(private) == [] and memory.note_subjects(private) == (0, [])
     assert "Friday" in text(private, "pretend launch Friday")
+    assert memory.search(private, "pretend launch Friday", asked=False) == []  # the recall the mind adds to a brief on its own
     # Someone met only in practice is a stranger in real work.
     sam_record = memory.person(memory.resolve(sam))
     assert not memory.known_here(real, sam_record) and memory.known_here(practice_two, sam_record) and memory.known_here(private, sam_record)

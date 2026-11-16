@@ -32,7 +32,7 @@ AUDIENCE_TEXT = {
 MODE_TEXT = {
     "ambient": "nobody addressed you directly",
     "continuation": "a continuation of work you already accepted",
-    "voice": "a live voice call, so your reply is spoken aloud: one to three short sentences, no lists or formatting, and offer more if they want it",
+    "voice": "a live voice call, so your reply is read aloud and the caller cannot skim it: give the answer in one or two short sentences, about 30 words at most, no lists or formatting, and offer more if they want it",
 }
 
 
