@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Vigil keeps a Constellation agent awake between messages: one memory across every place it is reached, promises it keeps, and background work of its own.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Vigil · One teammate, awake between messages">
+  <meta property="og:description" content="An always-on engine for an Amplifier Constellation agent: one memory across every place, promises it keeps, and background work of its own.">
+  <meta property="og:url" content="https://bkrabach.github.io/amplifier-constellation-vigil/">
+  <meta property="og:image" content="https://bkrabach.github.io/amplifier-constellation-vigil/assets/social-card.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <title>Vigil · One teammate, awake between messages</title>
+  <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="masthead">
+    <a class="brand" href="./"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1.5C12.9 6.9 15.2 9.2 22.5 12 15.2 14.8 12.9 17.1 12 22.5 11.1 17.1 8.8 14.8 1.5 12 8.8 9.2 11.1 6.9 12 1.5Z" fill="#a63c17"/></svg>Vigil</a>
+    <nav aria-label="Page"><a href="#adds">What it adds</a><a href="#turn">How it works</a><a href="#start">Get started</a><a href="https://github.com/bkrabach/amplifier-constellation-vigil">GitHub</a></nav>
+  </header>
+  <main id="main">
+    <section class="intro" aria-labelledby="intro-title">
+      <div>
+        <h1 id="intro-title">One teammate.<br>Awake between messages.</h1>
+        <p>Your agent is reached in Slack, in a game world, on a voice call and in the browser. Each of those is a separate session, and its engine only wakes when a message arrives. Vigil is an engine that stays awake in between, so the agent is the same colleague in every room.</p>
+        <p class="actions"><a class="cta" href="#start">Get started</a><a href="https://github.com/bkrabach/amplifier-constellation-vigil/blob/main/docs/DESIGN.md">Read the design</a><a href="https://github.com/bkrabach/amplifier-constellation-vigil">Source on GitHub</a></p>
+        <p class="family">Built for <a href="https://microsoft.github.io/amplifier-constellation/">Amplifier Constellation</a>. To an Agent Instance, Vigil is an ordinary ACP agent, and nothing in any experience changes.</p>
+      </div>
+      <figure class="hero-art">
+        <svg viewBox="0 0 440 404" role="img" aria-labelledby="hero-title hero-desc" font-family="'Trebuchet MS', system-ui, sans-serif">
+          <title id="hero-title">One mind behind four places</title>
+          <desc id="hero-desc">Four places where people reach the agent, a Slack channel, a game world, a voice call and a browser conversation, all connect to one mind that holds a notebook, the people it knows and the promises it made.</desc>
+          <ellipse cx="220" cy="202" rx="176" ry="134" fill="none" stroke="#d7bfa8" stroke-width="1.5" stroke-dasharray="2 8" stroke-linecap="round"/>
+          <g stroke="#7a4a33" stroke-width="1.6" stroke-dasharray="5 5" stroke-linecap="round" fill="none">
+            <path d="M118 88 L161 143"/>
+            <path d="M322 88 L279 143"/>
+            <path d="M118 316 L161 261"/>
+            <path d="M322 316 L279 261"/>
+          </g>
+          <path d="M220 9C221.3 16.7 224.6 20 235 24 224.6 28 221.3 31.3 220 39 218.7 31.3 215.4 28 205 24 215.4 20 218.7 16.7 220 9Z" fill="#a63c17"/>
+          <path d="M22 193C22.8 197.6 24.7 199.6 31 202 24.7 204.4 22.8 206.4 22 211 21.2 206.4 19.3 204.4 13 202 19.3 199.6 21.2 197.6 22 193Z" fill="#a63c17" opacity=".5"/>
+          <path d="M418 193C418.8 197.6 420.7 199.6 427 202 420.7 204.4 418.8 206.4 418 211 417.2 206.4 415.3 204.4 409 202 415.3 199.6 417.2 197.6 418 193Z" fill="#a63c17" opacity=".5"/>
+          <path d="M220 370C221 376.2 223.7 378.8 232 382 223.7 385.2 221 387.8 220 394 219 387.8 216.3 385.2 208 382 216.3 378.8 219 376.2 220 370Z" fill="#3e6753" opacity=".85"/>
+          <circle cx="220" cy="202" r="84" fill="#f5d0b9" stroke="#a63c17" stroke-width="2.5"/>
+          <text x="220" y="184" text-anchor="middle" font-size="22" font-weight="700" fill="#382316">One mind</text>
+          <g font-size="14.5" fill="#5a3a28" text-anchor="middle">
+            <text x="220" y="211">a notebook</text>
+            <text x="220" y="231">the people it knows</text>
+            <text x="220" y="251">promises it made</text>
+          </g>
+          <g fill="#fffdf9" stroke="#d7bfa8" stroke-width="1.5">
+            <rect x="6" y="30" width="144" height="58" rx="12"/>
+            <rect x="290" y="30" width="144" height="58" rx="12"/>
+            <rect x="6" y="316" width="144" height="58" rx="12"/>
+            <rect x="290" y="316" width="144" height="58" rx="12"/>
+          </g>
+          <g text-anchor="middle" fill="#382316" font-size="17" font-weight="700">
+            <text x="78" y="55">Slack</text>
+            <text x="362" y="55">Minecraft</text>
+            <text x="78" y="341">A voice call</text>
+            <text x="362" y="341">The browser</text>
+          </g>
+          <g text-anchor="middle" fill="#6c503e" font-size="13.5">
+            <text x="78" y="75">a team channel</text>
+            <text x="362" y="75">a shared world</text>
+            <text x="78" y="361">one to one</text>
+            <text x="362" y="361">a conversation</text>
+          </g>
+        </svg>
+        <figcaption>An illustration of the idea, not a screenshot.</figcaption>
+      </figure>
+    </section>
+
+    <section id="adds" aria-labelledby="adds-title">
+      <h2 id="adds-title">What changes for the people who work with it</h2>
+      <p class="section-copy">A Constellation agent already has one dependable identity. Vigil gives that identity a continuous inner life: what it knows, who it is talking to, and what it still owes someone.</p>
+      <ul class="adds">
+        <li><h3>It knows what it said elsewhere</h3><p>Every turn starts with a short brief the agent's own core writes: where it is, who is speaking, what it knows about them, and what it was doing in other places.</p></li>
+        <li><h3>Private stays private</h3><p>Something said in a shared space can surface elsewhere when a person present was part of it. A private exchange never leaves the relationship it happened in, not even for the owner.</p></li>
+        <li><h3>It comes back to things</h3><p>When the agent says it will check on something, the thought is held until it is due and then delivered where that person can hear it.</p></li>
+        <li><h3>It can work while you talk</h3><p>Longer tasks run in a session of the agent's own. Vigil checks that the work really finished and brings the report back to the conversation that asked.</p></li>
+        <li><h3>Your model, your runtime</h3><p>The default runtime is the Constellation native engine, so every provider it supports works. Any other agent that speaks ACP can be the main runtime or take delegated work.</p></li>
+        <li><h3>It degrades instead of going dark</h3><p>If the always-on part is down, the bridge runs the runtime directly. The agent still answers, without its memory, until the daemon returns.</p></li>
+      </ul>
+    </section>
+
+    <section id="turn" class="turn" aria-labelledby="turn-title">
+      <h2 id="turn-title">How a turn goes</h2>
+      <p class="section-copy">Vigil does not replace the model loop. It sits between the Agent Instance and a runtime, relays their conversation unchanged, and adds what a session on its own cannot know.</p>
+      <ol class="steps">
+        <li><h3>A message arrives</h3><p>It comes through the Agent Instance exactly as before. A thin bridge hands it to the daemon that was already awake.</p></li>
+        <li><h3>Vigil reads the room</h3><p>Who is speaking, who else can hear, and what may be said here. From that it writes the presence brief for this turn.</p></li>
+        <li><h3>The runtime answers</h3><p>The model reasons and uses tools as usual, with a few more at hand: write a note, recall, hold a follow-up, hand off a longer task.</p></li>
+        <li><h3>Vigil keeps what mattered</h3><p>What happened goes in a journal. Overnight, the entries worth keeping become lasting notes, each with the audience it belongs to.</p></li>
+      </ol>
+      <p class="small">Small, fast decision models can settle the reflexes, such as how hard to think and whether memory is worth reading. They are optional; without one, Vigil uses plain rules.</p>
+    </section>
+
+    <section id="fits" aria-labelledby="fits-title">
+      <h2 id="fits-title">Where it fits</h2>
+      <p>@@SUMMARY@@</p>
+      <p class="role-summary">@@ROLE_SUMMARY@@ Identity, access, attention and context sources stay with the Agent Instance.</p>
+      <figure>
+        <div class="map-scroll" role="region" tabindex="0" aria-label="Scrollable project map"><a href="ecosystem/map.svg"><img src="ecosystem/map.svg" width="1200" height="894" alt="Vigil: ecosystem roles and project relationships. Constellation Instance uses Vigil. Vigil contains an ACP bridge and conductor, follow-ups and background work, and a mind with memory and a presence brief. The conductor uses the selected runtime; the mind optionally uses decision models."></a></div>
+        <figcaption>Scroll the map or <a href="ecosystem/map.svg">open it full size</a>. Role highlights describe scope, not proof of complete contract conformance.</figcaption>
+      </figure>
+      <ul class="relations">
+@@RELATIONS@@
+      </ul>
+      <ul class="links">
+        <li><a href="ecosystem/">Ecosystem map page</a></li>
+        <li><a href="https://microsoft.github.io/amplifier-constellation/">The five Constellation building blocks</a></li>
+        <li><a href="https://github.com/microsoft/amplifier-constellation/blob/main/docs/ecosystem-maps.md">How to read these maps</a></li>
+      </ul>
+    </section>
+
+    <section id="start" class="start" aria-labelledby="start-title">
+      <h2 id="start-title">Get started</h2>
+      <p class="section-copy">You need Linux with systemd user services, Python 3.12 or newer, and a model credential. Run everything as the OS user who owns the agent.</p>
+      <ol>
+        <li>
+          <div><h3>Install it for one agent</h3><p>From a checkout of the repository. This creates a private home with its own Python environment, a pinned and checksummed runtime, and a user service that keeps the daemon awake.</p></div>
+          <pre tabindex="0"><code>git clone https://github.com/bkrabach/amplifier-constellation-vigil
+cd amplifier-constellation-vigil
+bash install.sh --name Polaris --owner-name Ada \
+  --workspace "$HOME/.local/share/agent-instance/polaris/workspace"</code></pre>
+        </li>
+        <li>
+          <div><h3>Choose a model and start</h3><p>Everything after <code>--</code> goes to the engine unchanged, so any provider is set up the way the engine's own documentation describes.</p></div>
+          <pre tabindex="0"><code>VIGIL=~/.local/share/vigil/polaris/venv/bin/vigil
+H=~/.local/share/vigil/polaris
+$VIGIL --home $H secret model-key --from-env ANTHROPIC_API_KEY
+$VIGIL --home $H engine init -- --provider anthropic \
+  --model claude-opus-5-5 --key-env AGENT_MODEL_API_KEY
+systemctl --user start vigil-polaris
+$VIGIL --home $H status</code></pre>
+        </li>
+        <li>
+          <div><h3>Point an Agent Instance at it</h3><p>Set the Instance's backend to the bridge command. Slack, Minecraft, Conversations and the rest keep attaching to the Instance exactly as for any other agent.</p><p>Install the Instance without a backend first. <a href="https://github.com/bkrabach/amplifier-constellation-vigil#host-it-in-an-agent-instance">The README has the details</a>.</p></div>
+          <pre tabindex="0"><code>"backend": {
+  "command": "/home/you/.local/share/vigil/polaris/venv/bin/vigil",
+  "args": ["acp", "--home", "/home/you/.local/share/vigil/polaris"],
+  "env": {}, "secret_env": {},
+  "working_directory": "${AGENT_HOME}/workspace",
+  "allowed_working_roots": ["${AGENT_HOME}/workspace"]
+}</code></pre>
+        </li>
+      </ol>
+    </section>
+
+    <section id="limits" class="next" aria-labelledby="limits-title">
+      <h2 id="limits-title">What to know first</h2>
+      <p>Vigil is a young project, at version 0.1.0. These are its real edges today.</p>
+      <dl>
+        <div><dt>Experiences decide when the agent speaks</dt><dd>No Constellation experience lets an agent post on its own. Vigil reaches a quiet Slack conversation through that connector's follow-up tool; elsewhere, a held thought is delivered the next time that person talks to the agent.</dd></div>
+        <div><dt>Shared memory needs someone in common</dt><dd>A memory from a shared space surfaces in another place only when a person present was part of it. Across surfaces that requires their accounts to be linked, and Vigil links them only on evidence a surface can vouch for.</dd></div>
+        <div><dt>Checked on Linux</dt><dd>The installer and the service use systemd user units. The same scenario passes with the native engine on Anthropic, OpenAI and Gemini models, and with Claude Agent, Codex, OpenCode and Copilot CLI as the runtime. Gemini CLI passes once its workspace is trusted.</dd></div>
+      </dl>
+      <p class="small">The <a href="https://github.com/bkrabach/amplifier-constellation-vigil#limits-to-know-about">README lists every limit</a> and the <a href="https://github.com/bkrabach/amplifier-constellation-vigil/blob/main/docs/DESIGN.md">design document</a> explains the choices behind them. Component documentation defines what is available; this page explains the direction.</p>
+    </section>
+  </main>
+  <footer><span>Vigil is an independent open-source project that works with the <a href="https://github.com/microsoft/amplifier-constellation">Amplifier Constellation</a> ecosystem.</span><a href="https://github.com/bkrabach/amplifier-constellation-vigil">GitHub</a><a href="https://github.com/bkrabach/amplifier-constellation-vigil/blob/main/LICENSE">MIT License</a></footer>
+</body>
+</html>

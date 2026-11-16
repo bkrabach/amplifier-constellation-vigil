@@ -6,6 +6,8 @@ A Constellation agent already has a dependable outward identity: one Instance th
 
 To the Instance, Vigil is an ordinary ACP agent. Nothing in any experience changes.
 
+The [product page](https://bkrabach.github.io/amplifier-constellation-vigil/) introduces it in a few minutes, with a map of where it fits.
+
 ```
 Slack · Minecraft · Companion · Conversations · Observatory · any ACP client
                          │  ACP (unchanged)
@@ -187,6 +189,26 @@ Logs are in `logs/` under the home: `vigil.log` for the daemon, `shim.log` for b
 - **Practice stays in practice.** List test workspaces and scratch worlds under `mind.rehearsal_places` (place-key and account prefixes, for example `["slack:T0TEST", "minecraft:scratch"]`). What the agent learns there never surfaces in other places, is not consolidated into lasting notes, and people met only there are strangers elsewhere. The owner can still look it up by asking in private.
 - **Shared memory needs someone in common.** A shared-space memory surfaces in another place only when a person present was part of it, which across surfaces requires their accounts to be linked. `mind.cross_space = "hints"` or `"strict"` narrows this.
 - **Session options.** Per-turn effort selection applies to runtimes that expose a `thought_level` session option, which the native engine does.
+
+<!-- ecosystem-map:start -->
+## Where this fits
+
+An always-on engine that an Agent Instance can select. Outside it is an ordinary ACP agent; inside, a daemon keeps memory and a schedule and drives a runtime of your choice.
+
+Supports: Agent Instance.
+
+![Ecosystem roles and component relationships](docs/ecosystem-map.svg)
+
+[Product website](https://bkrabach.github.io/amplifier-constellation-vigil/) · [Ecosystem map](https://bkrabach.github.io/amplifier-constellation-vigil/ecosystem/) · [Open the map](docs/ecosystem-map.svg) · [Map guide](https://github.com/microsoft/amplifier-constellation/blob/main/docs/ecosystem-maps.md)
+
+<details>
+<summary>The five shared building blocks</summary>
+
+[![Experience, Conversation, Agent Instance, Connection and Tool](https://raw.githubusercontent.com/microsoft/amplifier-constellation/main/site/assets/art/building-blocks.png)](https://microsoft.github.io/amplifier-constellation/)
+
+</details>
+
+<!-- ecosystem-map:end -->
 
 ## Develop
 
