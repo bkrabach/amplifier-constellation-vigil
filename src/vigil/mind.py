@@ -32,6 +32,9 @@ log = logging.getLogger("vigil.mind")
 
 MIND_SERVER = "mind"
 MAINTENANCE_META = "com.microsoft.amplifier.maintenance"
+#: The native engine's statement of which tool a call is for, taken from its own tool
+#: registry and not from anything the model wrote (runtime `docs/acp-optional-capabilities.md`).
+TOOL_META = "com.microsoft.amplifier.tool"
 MESSAGE_META = "com.microsoft.amplifier.message"
 EFFORTS = ("low", "medium", "high")
 _GREETING = re.compile(r"^\W*(hi|hey|hello|yo|thanks|thank you|thx|ok|okay|cool|nice|great|good (morning|night|evening)|gm|gn|lol|👍|🙏)\W*$", re.I)
@@ -118,6 +121,24 @@ _MCP_KINDS = (None, "", "other")
 
 def _own_tool(call: dict[str, Any], meta: dict[str, Any] | None = None) -> str | None:
     """Which mind tool a permission request is for, or None.
+
+    When the engine states the call's identity itself, that statement has to name the
+    same mind tool. It can only withdraw an approval, never grant one: a runtime that
+    relays metadata it did not write gains nothing by sending it.
+    """
+    tool = _claimed_tool(call, meta)
+    if tool is None:
+        return None
+    carried = call.get("_meta")
+    identity = carried.get(TOOL_META) if isinstance(carried, dict) else None
+    if isinstance(identity, dict) and identity.get("version") == 1:
+        if (identity.get("kind"), identity.get("server"), identity.get("name")) != ("mcp", MIND_SERVER, tool):
+            return None
+    return tool
+
+
+def _claimed_tool(call: dict[str, Any], meta: dict[str, Any] | None = None) -> str | None:
+    """Which mind tool a permission request's title and arguments say it is for, or None.
 
     The answer decides an automatic approval, so it must not rest on text the model
     controls. Two shapes are accepted:

@@ -350,6 +350,27 @@ def test_only_a_real_mind_tool_request_is_approved_automatically():
     assert _own_tool({"title": "", "kind": "other"}) is None and _own_tool({}) is None
 
 
+def test_an_engine_stated_identity_can_only_withdraw_an_approval():
+    def stated(**identity):
+        return {"com.microsoft.amplifier.tool": {"version": 1, **identity}}
+
+    envelope = {"server": "mind", "tool": "mind_note", "arguments": {"note": "x"}}
+    assert _own_tool({"rawInput": envelope, "_meta": stated(kind="mcp", server="mind", name="mind_note")}) == "mind_note"
+    # the engine says this call is one of its built-in tools, or another tool, or another server's
+    assert _own_tool({"rawInput": envelope, "_meta": stated(kind="builtin", name="workspace_write")}) is None
+    assert _own_tool({"rawInput": envelope, "_meta": stated(kind="builtin", name="mind_note")}) is None
+    assert _own_tool({"rawInput": envelope, "_meta": stated(kind="mcp", server="mind", name="mind_forget")}) is None
+    assert _own_tool({"rawInput": envelope, "_meta": stated(kind="mcp", server="minecraft", name="mind_note")}) is None
+    assert _own_tool({"title": "mind_note", "kind": "other", "_meta": stated(kind="builtin", name="workspace_run")}) is None
+    # identity alone approves nothing: the request itself still has to be a mind tool's
+    assert _own_tool({"title": "run", "kind": "execute", "rawInput": {"command": "rm -rf ~"}, "_meta": stated(kind="mcp", server="mind", name="mind_note")}) is None
+    assert _own_tool({"rawInput": {"server": "minecraft", "tool": "dig", "arguments": {}}, "_meta": stated(kind="mcp", server="mind", name="mind_note")}) is None
+    # a format this version does not know is not read as a statement either way
+    unknown = {"com.microsoft.amplifier.tool": {"version": 2, "tool": {"id": "x"}}}
+    assert _own_tool({"rawInput": envelope, "_meta": unknown}) == "mind_note"
+    assert _own_tool({"rawInput": envelope, "_meta": {"com.microsoft.amplifier.tool": "mind_note"}}) == "mind_note"
+
+
 def test_only_a_thought_held_for_this_place_schedules_a_wake(memory: Memory):
     from vigil.mind import Mind
 
