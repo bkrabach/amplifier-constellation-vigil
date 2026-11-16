@@ -24,6 +24,9 @@ CONVERSATIONS_META = "com.microsoft.amplifier.conversations"
 
 _ORIENTATION = re.compile(r"\[Conversation orientation\]\n(.*?)\n\[/Conversation orientation\]", re.S)
 _SLACK_MARK = "Latest conversation projection:\n"
+#: A Slack update that arrives while a turn is running: guidance, this line, then one JSON
+#: object with the original `trigger` and, for a peer's message, an `awareness_input`.
+_SLACK_UPDATE = "Incremental conversation update:\n"
 _ROOM = re.compile(r"Room participants: (\{.*?\})\. Human speaker: (.*?)\. Trigger message: ", re.S)
 
 #: Vigil's own follow-up marker, placed in the goal of an adapter-scheduled continuation
@@ -299,12 +302,33 @@ def _minecraft(scene: Scene, texts: list[str]) -> bool:
     return True
 
 
-def steering_heard(blocks: list[Any]) -> str:
+def _slack_update(text: str, names: dict[str, str]) -> list[str] | None:
+    """The one new message in a Slack update, or None when the text is not one.
+
+    The update repeats the turn's original trigger, which the prompt already gave, so
+    only a peer's `awareness_input` is new. A recognised update never falls through to
+    the plain-text reading, whatever it holds: its guidance is not something anyone said."""
+    at = text.find(_SLACK_UPDATE)
+    data = _json_tail(text, at + len(_SLACK_UPDATE)) if at >= 0 else None
+    if not isinstance(data, dict) or not isinstance(data.get("trigger"), dict):
+        return None
+    said = data.get("awareness_input")
+    if not isinstance(said, dict) or said.get("deleted") or not str(said.get("text") or "").strip():
+        return []
+    sender = str(said.get("sender") or "")
+    if sender and sender == data.get("your_slack_user_id"):
+        return []
+    who = names.get(sender) or (f"<@{sender}>" if sender else "someone")
+    return [f'{who}: {said["text"]}']
+
+
+def steering_heard(blocks: list[Any], names: dict[str, str] | None = None) -> str:
     """What people said in input that arrives while a turn is running.
 
     Experiences wrap that input the way they wrap a prompt: an Instance reference
     block, a line of guidance, then the facts as JSON. Memory should keep the words,
-    one line per speaker, and none of the wrapping. Never raises."""
+    one line per speaker, and none of the wrapping. `names` maps a surface handle to a
+    display name for input that carries only handles. Never raises."""
     lines: list[str] = []
     for block in blocks or []:
         try:
@@ -316,6 +340,10 @@ def steering_heard(blocks: list[Any]) -> str:
             probe = Scene(session="")
             if _slack(probe, text) and probe.heard:
                 lines.append(f"{probe.actor.name}: {probe.heard}" if probe.actor and probe.actor.name else probe.heard)
+                continue
+            update = _slack_update(text, names or {})
+            if update is not None:
+                lines.extend(update)
                 continue
             at = text.find("\n{")
             data = _json_tail(text, at + 1) if at >= 0 else None
@@ -329,6 +357,19 @@ def steering_heard(blocks: list[Any]) -> str:
         except Exception:  # a reader must never break a turn
             continue
     return "\n".join(lines)
+
+
+def with_updates(heard: str, added: str, limit: int = 4000) -> str:
+    """What a turn heard, with later input appended, within `limit` characters.
+
+    When a long turn collects more than fits, the middle goes. The start stays because
+    it is what began the turn and what the reply answers; the end stays because it is
+    the newest."""
+    joined = f"{heard}\n{added}" if heard else added
+    if len(joined) <= limit:
+        return joined
+    head = joined[: limit // 2]
+    return f"{head}\n…\n{joined[-(limit - len(head) - 3):]}"
 
 
 def read(session: str, blocks: list[dict[str, Any]], meta: dict[str, Any] | None = None) -> Scene:
