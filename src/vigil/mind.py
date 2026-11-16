@@ -32,6 +32,9 @@ log = logging.getLogger("vigil.mind")
 
 MIND_SERVER = "mind"
 MAINTENANCE_META = "com.microsoft.amplifier.maintenance"
+#: The native engine's statement of which tool a call is for, taken from its own tool
+#: registry and not from anything the model wrote (runtime `docs/acp-optional-capabilities.md`).
+TOOL_META = "com.microsoft.amplifier.tool"
 MESSAGE_META = "com.microsoft.amplifier.message"
 EFFORTS = ("low", "medium", "high")
 _GREETING = re.compile(r"^\W*(hi|hey|hello|yo|thanks|thank you|thx|ok|okay|cool|nice|great|good (morning|night|evening)|gm|gn|lol|👍|🙏)\W*$", re.I)
@@ -118,6 +121,24 @@ _MCP_KINDS = (None, "", "other")
 
 def _own_tool(call: dict[str, Any], meta: dict[str, Any] | None = None) -> str | None:
     """Which mind tool a permission request is for, or None.
+
+    When the engine states the call's identity itself, that statement has to name the
+    same mind tool. It can only withdraw an approval, never grant one: a runtime that
+    relays metadata it did not write gains nothing by sending it.
+    """
+    tool = _claimed_tool(call, meta)
+    if tool is None:
+        return None
+    carried = call.get("_meta")
+    identity = carried.get(TOOL_META) if isinstance(carried, dict) else None
+    if isinstance(identity, dict) and identity.get("version") == 1:
+        if (identity.get("kind"), identity.get("server"), identity.get("name")) != ("mcp", MIND_SERVER, tool):
+            return None
+    return tool
+
+
+def _claimed_tool(call: dict[str, Any], meta: dict[str, Any] | None = None) -> str | None:
+    """Which mind tool a permission request's title and arguments say it is for, or None.
 
     The answer decides an automatic approval, so it must not rest on text the model
     controls. Two shapes are accepted:
@@ -221,6 +242,8 @@ class Mind:
         self.tokens: dict[str, str] = {}
         self.used_tokens: set[str] = set()
         self.quiet_hops: dict[str, int] = {}
+        #: Raw input the runtime announced for recent tool calls, by call id.
+        self.tool_inputs: dict[str, Any] = {}
         self.tools_ok: set[str] = set()
         self.tools_warned: set[str] = set()
         self.scenes: dict[str, Scene] = {}
@@ -348,6 +371,10 @@ class Mind:
             return params
         if sid in self.replaying:
             return params
+        if kind in ("tool_call", "tool_call_update") and update.get("toolCallId") and "rawInput" in update:
+            self.tool_inputs[str(update["toolCallId"])] = update["rawInput"]
+            while len(self.tool_inputs) > 256:
+                self.tool_inputs.pop(next(iter(self.tool_inputs)))
         turn = self.turns.get(sid)
         if turn is not None:
             if kind == "agent_message_chunk":
@@ -369,6 +396,24 @@ class Mind:
         if not chosen:
             return None
         return {"outcome": {"outcome": "selected", "optionId": chosen.get("optionId")}}
+
+    def imitates_tool_identity(self, params: dict[str, Any]) -> bool:
+        """True for a permission request whose own arguments name a server and a tool.
+
+        A runtime identifies a connector's tool to the client with an envelope of exactly
+        `{server, tool, arguments}`. Anything else that carries both of those keys is a
+        tool's arguments dressed to look like that identity, and a client that decides
+        from those keys would approve it. Such a request is not passed on."""
+        call = params.get("toolCall") or {}
+        if not isinstance(call, dict):
+            return False
+        candidates = [call.get("rawInput"), self.tool_inputs.get(str(call.get("toolCallId") or ""))]
+        for raw in candidates:
+            if not isinstance(raw, dict) or "server" not in raw or "tool" not in raw:
+                continue
+            if not (set(raw) == {"server", "tool", "arguments"} and isinstance(raw["arguments"], dict)):
+                return True
+        return False
 
     def note_cancel(self, link: Any, params: dict[str, Any]) -> None:
         turn = self.turns.get(params.get("sessionId") or "")

@@ -26,8 +26,20 @@ from .config import Config
 
 REPOSITORY = "microsoft/amplifier-constellation-runtime"
 
-#: Pinned releases. Hashes are the ones Constellation Instance publishes for the same assets.
+#: Pinned releases. Hashes are the ones each release publishes in its `SHA256SUMS` and
+#: per-package manifest. From 0.15.8 the engine states each tool's identity itself and
+#: checks a built-in tool's arguments against its schema before asking permission.
 RELEASES: dict[str, dict[str, dict[str, str]]] = {
+    "0.15.8": {
+        "linux-aarch64": {
+            "asset_sha256": "da83f8d2a13d55da29a080edec746f19f7a9e5cafecfd37f9a63ee915857770e",
+            "binary_sha256": "595983551adf056317f5a77cf7f2f9b2624c68dcfd3f5f75c8db951cebabfe5a",
+        },
+        "linux-x86_64": {
+            "asset_sha256": "d224218238d727551691ae5c53f13d070b60a9ca5bd26d7df0b870c1f213b9e1",
+            "binary_sha256": "00969373a7058cb3f20ae43bf7f8d32c00acefd3be60d1a984706d3b4a6f7c76",
+        },
+    },
     "0.15.7": {
         "linux-aarch64": {
             "asset_sha256": "2939784cbe34da57183d965cf16115ef244c51c763c54682b0469170b3c550b0",
@@ -37,9 +49,9 @@ RELEASES: dict[str, dict[str, dict[str, str]]] = {
             "asset_sha256": "814c0bd3009ca19958190ad55d9d7bea93300130226282fb47180c14b99ba8d4",
             "binary_sha256": "e20849084f3c161c51a73100128b10992356e9fb4be9d764709ece1e9c2d2eba",
         },
-    }
+    },
 }
-DEFAULT_VERSION = "0.15.7"
+DEFAULT_VERSION = "0.15.8"
 
 #: Mind tools that change Vigil's own memory. The engine is told it may call them
 #: without asking, since nothing outside Vigil is affected.

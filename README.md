@@ -186,7 +186,6 @@ Logs are in `logs/` under the home: `vigil.log` for the daemon, `shim.log` for b
 - **Experiences decide when the agent may speak.** No Constellation experience lets an agent post on its own. Vigil reaches a quiet Slack conversation by chaining the connector's follow-up tool (at most an hour per hop, each hop free of model calls). In other places a held thought is delivered the next time that person speaks to the agent.
 - **Practice stays in practice.** List test workspaces and scratch worlds under `mind.rehearsal_places` (place-key and account prefixes, for example `["slack:T0TEST", "minecraft:scratch"]`). What the agent learns there never surfaces in other places, is not consolidated into lasting notes, and people met only there are strangers elsewhere. The owner can still look it up by asking in private.
 - **Shared memory needs someone in common.** A shared-space memory surfaces in another place only when a person present was part of it, which across surfaces requires their accounts to be linked. `mind.cross_space = "hints"` or `"strict"` narrows this.
-- **Runtime 0.15.7 and Anthropic.** That release fails a turn when a tool is called with no arguments. Vigil's own tools always take one. For tools from experiences, either run a runtime that includes the fix in `ops/patches/`, or use another provider.
 - **Session options.** Per-turn effort selection applies to runtimes that expose a `thought_level` session option, which the native engine does.
 
 ## Develop

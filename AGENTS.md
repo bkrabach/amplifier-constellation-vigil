@@ -25,7 +25,8 @@ Vigil is an always-on engine for a Constellation Agent Instance. Read [README.md
 - **Every memory read goes through an audience filter.** A new query that returns notes, journal rows or thoughts must take a `Scene` and filter by it. Add a test in `tests/test_units.py` that shows a group cannot see what it should not.
 - **A reader must never raise.** An unfamiliar prompt yields a restrictive Scene, not an error.
 - **Keep the mind tool list stable.** Tools are part of a session's cached prefix. Add tools rarely, and give each at least one required argument.
-- **Automatic approval must not trust model text.** `_own_tool` in `mind.py` decides which permission requests Vigil approves by itself. A title is display text and raw arguments are often the model's own. Loosen that check only with a test in `tests/test_units.py` showing a forged request is still refused.
+- **Automatic approval must not trust model text.** `_own_tool` in `mind.py` decides which permission requests Vigil approves by itself. A title is display text and raw arguments are often the model's own. Loosen that check only with a test in `tests/test_units.py` showing a forged request is still refused. An identity the engine states (`com.microsoft.amplifier.tool`) may only withdraw an approval: metadata is not proof because it is called metadata.
+- **Changing the pinned engine.** Add the release's hashes to `RELEASES` in `engine.py` from its `SHA256SUMS` and per-package manifest, and check the unpacked binary against them yourself. On a live agent, update the engine before a connector that depends on what the newer engine sends: a newer client with an older engine behind Vigil can refuse the agent's legitimate tools.
 - **Use declared interfaces only.** Do not read another component's files or secrets. Call an experience's tool through the descriptor it gave the session.
 - **Do not add a second social gate.** Whether to speak in a group is the Instance's attention decision.
 
@@ -45,6 +46,8 @@ A restart waits up to `server.drain_seconds` (45 by default) for running turns t
 ## When a runtime misbehaves
 
 Do not guess. Run it through `tests/runtime_matrix.py --only NAME --keep` and read `logs/vigil.log` in the kept home: the trace shows whether the runtime opened the mind's tool server and what it asked permission for. A runtime that never calls `tools/list` has no mind tools, whatever it advertised. The matrix refuses every permission request that is not for a mind tool; keep it that way, because a model without its tools will otherwise explore the machine.
+
+A turn that ends with `Provider requested a tool that was not offered` means the model asked for a tool by a name the session did not list, usually a mind tool's short name (`mind_note`) where the engine listed `mcp_1_mind_note`. The native engine fails the whole turn on that, in every version up to 0.15.8. Its history keeps what the model asked for: read the `function_call` items of the session in `engine/home/history.sqlite3` (`sessions.items`) before suspecting anything else. The standing instructions tell the model to use listed names; with that line, six of six note-saving turns used the listed name on a live agent where eight of eleven had not.
 
 ## Testing against a live agent
 

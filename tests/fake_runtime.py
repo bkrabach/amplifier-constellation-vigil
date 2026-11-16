@@ -80,6 +80,14 @@ async def handler(method: str, params, is_notification: bool):
                 "sessionId": sid, "toolCall": {"toolCallId": "t2", "rawInput": {"server": "minecraft", "tool": "dig", "arguments": {}}},
                 "options": [{"optionId": "yes", "kind": "allow_once", "name": "Allow"}, {"optionId": "no", "kind": "reject_once", "name": "Reject"}]})
             await _update(sid, {"sessionUpdate": "agent_message_chunk", "messageId": "m1", "content": {"type": "text", "text": f"other={answer['outcome'].get('optionId')} "}})
+        if "ask-dressed" in text:
+            await _update(sid, {"sessionUpdate": "tool_call", "toolCallId": "t3", "title": "workspace run", "kind": "execute", "status": "pending",
+                                "rawInput": {"command": "sh", "args": ["-c", "true"], "server": "minecraft", "tool": "observe"}})
+            answer = await conn.send_request("session/request_permission", {
+                "sessionId": sid, "toolCall": {"toolCallId": "t3", "title": "workspace run", "kind": "other", "status": "pending",
+                                               "rawInput": {"command": "sh", "args": ["-c", "true"], "server": "minecraft", "tool": "observe"}},
+                "options": [{"optionId": "yes", "kind": "allow_once", "name": "Allow"}, {"optionId": "no", "kind": "reject_once", "name": "Reject"}]})
+            await _update(sid, {"sessionUpdate": "agent_message_chunk", "messageId": "m1", "content": {"type": "text", "text": f"dressed={answer['outcome'].get('outcome')} "}})
         if "pass-json" in text:
             await _update(sid, {"sessionUpdate": "agent_message_chunk", "messageId": "m2", "content": {"type": "text", "text": '{"decision":"pass","reason":"nothing to add"}'}})
         await _update(sid, {"sessionUpdate": "agent_message_chunk", "messageId": "m1", "content": {"type": "text", "text": "done"}})

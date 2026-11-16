@@ -3,6 +3,7 @@
     python tests/drive.py --home HOME "hello" "what did I just say?"
     python tests/drive.py --home HOME --slack C123:U999:Dana "hi"      # a Slack channel turn
     python tests/drive.py --home HOME --session ID --load "again"       # reload a saved session
+    python tests/drive.py --home HOME --mcp game=http://127.0.0.1:9000/mcp "look around"   # with an experience's tools
 
 Each run is a fresh process, the way Slack and Conversations attach per turn.
 """
@@ -52,6 +53,7 @@ async def main() -> None:
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--command", help="attach command to run instead of `vigil acp`, e.g. an Instance's `agent-instance acp --home ...`")
     parser.add_argument("--cwd", help="session working folder (default: the workspace in vigil.toml)")
+    parser.add_argument("--mcp", action="append", default=[], metavar="NAME=URL", help="an HTTP tool server to hand the session, as an experience does; repeatable")
     parser.add_argument("texts", nargs="+")
     args = parser.parse_args()
     workspace = args.cwd or tomllib.loads((Path(args.home) / "vigil.toml").read_text())["agent"]["workspace"].replace("${VIGIL_HOME}", args.home)
@@ -82,6 +84,7 @@ async def main() -> None:
             return {"outcome": {"outcome": "selected", "optionId": option["optionId"]}}
         return None
 
+    servers = [{"type": "http", "name": name, "url": url, "headers": []} for name, _, url in (spec.partition("=") for spec in args.mcp)]
     conn = Connection(handler, proc.stdin, proc.stdout)
     started = time.time()
     init = await conn.send_request("initialize", {"protocolVersion": 1, "clientInfo": {"name": "drive", "version": "0"}, "clientCapabilities": {}})
@@ -90,11 +93,11 @@ async def main() -> None:
     if args.session:
         replaying = True
         method = "session/load" if args.load else "session/resume"
-        result = await conn.send_request(method, {"sessionId": args.session, "cwd": workspace, "mcpServers": []})
+        result = await conn.send_request(method, {"sessionId": args.session, "cwd": workspace, "mcpServers": servers})
         replaying = False
         sid = args.session
     else:
-        result = await conn.send_request("session/new", {"cwd": workspace, "mcpServers": []})
+        result = await conn.send_request("session/new", {"cwd": workspace, "mcpServers": servers})
         sid = result["sessionId"]
     if not args.quiet:
         options = {o["id"]: (o.get("currentValue"), o.get("category")) for o in result.get("configOptions") or []}

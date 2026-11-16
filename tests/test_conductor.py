@@ -189,6 +189,20 @@ def test_permissions_own_tools_only(run):
     run(scenario)
 
 
+def test_a_request_dressed_as_a_connector_tool_never_reaches_the_client(run):
+    async def scenario(config, daemon):
+        client = Client()
+        await client.attach(config)
+        sid = (await client.conn.send_request("session/new", {"cwd": config.workspace, "mcpServers": []}))["sessionId"]
+        await client.conn.send_request("session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": "ask-dressed ask-other"}]})
+        # A command whose own arguments say server=minecraft, tool=observe is cancelled here.
+        # The genuine envelope for another server's tool still goes to the client to decide.
+        assert "dressed=cancelled" in client.text() and "other=no" in client.text()
+        assert [p["toolCall"]["toolCallId"] for p in client.permissions] == ["t2"]
+        await client.close()
+    run(scenario, port=47939)
+
+
 def test_reload_hides_brief_and_pass_is_silence(run):
     async def scenario(config, daemon):
         first = Client()

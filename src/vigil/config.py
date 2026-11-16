@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -78,7 +79,7 @@ class Config:
     # ---- paths ---------------------------------------------------------------------
     @property
     def socket_path(self) -> Path:
-        return self.home / "run" / "vigil.sock"
+        return socket_path(self.home)
 
     @property
     def db_path(self) -> Path:
@@ -212,3 +213,23 @@ def ensure_layout(home: Path) -> None:
     for sub in ("run", "logs", "secrets", "memory", "workspace"):
         (home / sub).mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(home, 0o700)
+
+
+#: A Unix socket's path has to fit the kernel's address structure, terminator included:
+#: 108 bytes on Linux, 104 on macOS.
+SOCKET_PATH_LIMIT = 103 if sys.platform == "darwin" else 107
+
+
+def socket_path(home: Path) -> Path:
+    return home / "run" / "vigil.sock"
+
+
+def socket_path_problem(home: Path) -> str | None:
+    """Why the daemon could not listen under this home, or None. Without the daemon the
+    bridge starts the runtime alone, and the agent then has no memory tools, so a home
+    that cannot work is refused when it is created and when the daemon starts."""
+    path = socket_path(home)
+    size = len(os.fsencode(str(path)))
+    if size > SOCKET_PATH_LIMIT:
+        return f"{path} is {size} bytes long; a Unix socket path can be at most {SOCKET_PATH_LIMIT}. Use a home with a shorter path."
+    return None
