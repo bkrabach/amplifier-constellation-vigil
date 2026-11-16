@@ -47,6 +47,8 @@ A restart waits up to `server.drain_seconds` (45 by default) for running turns t
 
 Do not guess. Run it through `tests/runtime_matrix.py --only NAME --keep` and read `logs/vigil.log` in the kept home: the trace shows whether the runtime opened the mind's tool server and what it asked permission for. A runtime that never calls `tools/list` has no mind tools, whatever it advertised. The matrix refuses every permission request that is not for a mind tool; keep it that way, because a model without its tools will otherwise explore the machine.
 
+A turn that ends with `Provider requested a tool that was not offered` means the model asked for a tool by a name the session did not list, usually a mind tool's short name (`mind_note`) where the engine listed `mcp_1_mind_note`. The native engine fails the whole turn on that, in every version up to 0.15.8. Its history keeps what the model asked for: read the `function_call` items of the session in `engine/home/history.sqlite3` (`sessions.items`) before suspecting anything else. The standing instructions tell the model to use listed names; with that line, six of six note-saving turns used the listed name on a live agent where eight of eleven had not.
+
 ## Testing against a live agent
 
 Rehearsals leave memories. Before driving a deployed agent with scripted people, list the test places under `mind.rehearsal_places` in its `vigil.toml` so nothing learned there reaches real work. Afterwards, `vigil memory forget --place <prefix> --people` shows what a clean-up would remove and `--apply` removes it. Do not edit the SQLite file by hand: the search indexes go stale.
