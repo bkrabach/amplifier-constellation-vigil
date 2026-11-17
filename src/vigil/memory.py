@@ -131,6 +131,11 @@ class Memory:
         """A place the owner marked as practice: a test workspace, a scratch world."""
         return bool(place) and any(place.startswith(prefix) for prefix in self._rehearsal_prefixes())
 
+    def practice_kept_apart(self, scene: Scene) -> bool:
+        """True where a search cannot see what was learned in practice: the owner has
+        marked some places as practice, and this scene is not one of them."""
+        return bool(self._rehearsal_prefixes()) and not self.is_rehearsal(scene.place)
+
     def _outside_rehearsal(self, scene: Scene, column: str = "place") -> tuple[str, list[Any]]:
         """SQL that hides what was learned in a rehearsal place from every scene outside
         one. Inside a rehearsal place everything follows the ordinary rules."""

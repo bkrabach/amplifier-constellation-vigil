@@ -472,6 +472,9 @@ def test_rehearsal_places_keep_practice_out_of_real_work(memory: Memory):
     assert text(real, "pretend launch Friday") == "" and memory.elsewhere(real) == []
     assert memory.note_subjects(real) == (0, [])
     assert memory.thoughts_due(scene_for(memory, "slack:T1:CREAL", "group", owner_real)) == []
+    # Coming up empty there, the agent is told why. Asked in a real room about a test
+    # workspace, a live agent guessed that the chats ran on another instance.
+    assert memory.practice_kept_apart(real) and not memory.practice_kept_apart(practice)
     # Another room of the same practice workspace follows the ordinary rules.
     practice_two = scene_for(memory, "slack:TEST:C2", "group", owner_test)
     assert "Friday" in text(practice_two, "pretend launch Friday") and memory.elsewhere(practice_two)

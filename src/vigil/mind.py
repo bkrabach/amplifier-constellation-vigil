@@ -713,7 +713,9 @@ class Mind:
         if name == "mind_recall":
             hits = memory.search(scene, str(args.get("query") or ""), int(args.get("limit") or 6))
             if not hits:
-                return "Nothing in your notebook or journal matches, within what this audience may know."
+                # Asked about a test workspace, a live agent guessed at reasons for finding nothing.
+                apart = " What you did in places your owner marked as practice (a test workspace, a scratch world) is kept apart on purpose: you recall it there, or when your owner asks you in private." if memory.practice_kept_apart(scene) and scene.audience != "owner" else ""
+                return "Nothing in your notebook or journal matches, within what this audience may know." + apart
             lines = []
             for hit in hits:
                 if hit["kind"] == "note":
