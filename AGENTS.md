@@ -23,6 +23,7 @@ Vigil is an always-on engine for a Constellation Agent Instance. Read [README.md
 
 - **Relay before the first `await`.** The SDK starts one task per incoming message and enqueues outgoing messages in a task's first step. A conductor handler that awaits anything before relaying can reorder a stream. `conductor.py` explains this at the top.
 - **Every memory read goes through an audience filter.** A new query that returns notes, journal rows or thoughts must take a `Scene` and filter by it. Add a test in `tests/test_units.py` that shows a group cannot see what it should not.
+- **Only the owner sends the agent across places.** `mind_follow_up` with `where` puts a note in another place's brief. It is refused outside an owner-private conversation, because from anywhere else it would carry one room's talk into another past the audience filter. Keep that check, and keep its test.
 - **A reader must never raise.** An unfamiliar prompt yields a restrictive Scene, not an error.
 - **Keep the mind tool list stable.** Tools are part of a session's cached prefix. Add tools rarely, and give each at least one required argument.
 - **Automatic approval must not trust model text.** `_own_tool` in `mind.py` decides which permission requests Vigil approves by itself. A title is display text and raw arguments are often the model's own. Loosen that check only with a test in `tests/test_units.py` showing a forged request is still refused. An identity the engine states (`com.microsoft.amplifier.tool`) may only withdraw an approval: metadata is not proof because it is called metadata.
@@ -90,6 +91,8 @@ So a person's question may never be a turn of its own. The reader keeps all thre
 What the agent said in the game is what `chat` and `tell` delivered. The connector posts the text that ends a turn only when a person spoke to the agent and it tried no speech tool; after another agent's message or its own activity that text goes nowhere (`final_reply_withheld` in the connector's log). A `chat` call that names the message it replies to is refused once anyone else has spoken (`Reply source changed or was not exposed as pending public input`), and each refusal costs the person waiting another model request.
 
 Each game prompt is about 50,000 characters: the connector's observation is 36,000 to 42,000 of them and the Instance's context 9,000, against under 3,000 for the brief. Every chat line that starts a turn therefore adds about 22,000 tokens. With provider compaction the engine keeps each of those whole until it next compacts, so a busy room compacts every third or fourth turn at a 100,000-token threshold, and each compaction holds the turn for 10 to 14 seconds. `model.started` (`counted_model_context_bytes`) and `context.*` in the engine's events show it.
+
+When the owner is in the game and the agent seems to know nothing of what they asked for elsewhere, look at what it is holding (`vigil status` gives the count; the `thoughts` table has the text and scope). A follow-up scoped to a person or to the owner waits for a private conversation, and public game chat is not one. From 0.1.7 the agent can set such a thing for the place it concerns.
 
 ## Linking one of the owner's accounts
 

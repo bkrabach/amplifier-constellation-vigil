@@ -82,7 +82,8 @@ No Constellation experience lets an agent post unprompted, and Vigil does not go
 
 - **Slack wake chain.** The Slack connector gives a running turn a `slack_follow_up` tool that schedules one continuation, at most an hour ahead. When a turn ends with something still owed in that conversation, Vigil calls that tool itself with a marked goal. When the continuation arrives and nothing is due yet, Vigil answers it without a model call and schedules the next hop. When the thought is due, the model writes the message in its own voice. If the model scheduled its own follow-up in the turn, Vigil leaves it alone.
 - **Next contact.** Elsewhere, the thought appears in the brief the next time it can be heard: in the same place, or, for a thought that follows a person, wherever the agent next talks with them in an audience no wider than where it was created. A follow-up set in a private place that cannot wake the agent follows the person by default.
-- **Reports from background work** are held thoughts too, so they use the same two paths.
+- **Another place.** When the owner asks in private for something to be done somewhere else, the agent sets the follow-up for that place by name (`where`). It waits there as the agent's own note and appears in the brief the next time the agent is active in that place. Only an owner-private conversation can set one: the owner may send the agent across places, and nothing said in one room travels to another this way. The agent writes the note for the audience it will be read in. Without this, a request made on a voice call about the game waited for the owner's next private conversation, and the agent in the game knew nothing of it.
+- **Reports from background work** are held thoughts too, so they use the same paths.
 
 ## Decisions
 
