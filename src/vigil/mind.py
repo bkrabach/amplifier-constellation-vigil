@@ -75,8 +75,8 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "mind_follow_up",
-        "description": "Hold a thought to return to later. Give 'in_minutes' or an ISO 'at' time. Scope 'here' brings it back in this conversation, 'person' the next time you talk with that person in a suitable place (give 'who' when it is someone other than the speaker, or when it belongs in another place), 'owner' the next time you talk privately with your owner. Leave scope out to let your core choose the one most likely to reach them. Use it whenever you promise to check, remind or get back to someone.",
-        "inputSchema": {"type": "object", "properties": {"about": {"type": "string", "description": "What to bring up, written so it makes sense later without this conversation."}, "in_minutes": {"type": "number", "minimum": 0}, "at": {"type": "string"}, "scope": {"type": "string", "enum": ["here", "person", "owner"]}, "who": {"type": "string", "description": "For scope 'person': their name. Defaults to whoever is speaking."}, "repeat_every_minutes": {"type": "number", "minimum": 5}}, "required": ["about"], "additionalProperties": False},
+        "description": "Hold a thought to return to later. Give 'in_minutes' or an ISO 'at' time. Scope 'here' brings it back in this conversation, 'person' the next time you talk with that person in a suitable place (give 'who' when it is someone other than the speaker, or when it belongs in another place), 'owner' the next time you talk privately with your owner. Leave scope out to let your core choose the one most likely to reach them. Use it whenever you promise to check, remind or get back to someone. When your owner asks you in private to do something in another of your places, give 'where' instead of a scope: the thought waits for you in that place.",
+        "inputSchema": {"type": "object", "properties": {"about": {"type": "string", "description": "What to bring up, written so it makes sense later without this conversation."}, "in_minutes": {"type": "number", "minimum": 0}, "at": {"type": "string"}, "scope": {"type": "string", "enum": ["here", "person", "owner"]}, "who": {"type": "string", "description": "For scope 'person': their name. Defaults to whoever is speaking."}, "where": {"type": "string", "description": "Another of your places, by the name your brief or mind_elsewhere gives it, for something to do there. Only in a private conversation with your owner. Write 'about' for that place's audience: it holds what to do, not what was said to you in private."}, "repeat_every_minutes": {"type": "number", "minimum": 5}}, "required": ["about"], "additionalProperties": False},
         "annotations": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False},
     },
     {
@@ -817,6 +817,10 @@ class Mind:
                 raise ToolError("'at' must be an ISO time such as 2026-11-16T09:00.") from None
         elif args.get("in_minutes") is not None:
             due = now() + float(args["in_minutes"]) * 60
+        every = int(float(args["repeat_every_minutes"]) * 60) if args.get("repeat_every_minutes") else None
+        where = str(args.get("where") or "").strip()
+        if where:
+            return self._follow_up_elsewhere(scene, where, about, due, every)
         scope = str(args.get("scope") or "")
         if scope not in ("here", "person", "owner"):
             # Unless told otherwise: stay in this conversation when it can bring the
@@ -828,7 +832,6 @@ class Mind:
             person = self.memory.find_person(who) if who else scene.actor_person
             if not person:
                 raise ToolError(f"You do not know anyone called {who}.")
-        every = int(float(args["repeat_every_minutes"]) * 60) if args.get("repeat_every_minutes") else None
         thought_id = self.memory.thought_add(scene, "followup", about, due, scope, person, every)
         when = brief.local_now(self.config).fromtimestamp(due, brief.local_now(self.config).tzinfo).strftime("%a %H:%M")
         how = "It will come back to you here" if scope == "here" else ("It will come back the next time you talk with them" if scope == "person" else "It will come back in your next private session with your owner")
@@ -838,6 +841,28 @@ class Mind:
         elif scope == "person" and not args.get("scope"):
             note = " This place cannot wake you on its own, so it follows the person instead."
         return f"Held as follow-up #{thought_id}, due {when}. {how}.{note}"
+
+    def _follow_up_elsewhere(self, scene: Scene, where: str, about: str, due: float, every: int | None) -> str:
+        """Hold a thought for another place: something the owner asked for in private
+        that has to be done somewhere else. It waits in that place as the agent's own
+        note. Only the owner can send the agent across places, so only an owner-private
+        conversation can set one; anything else would carry one room's talk into another."""
+        if scene.audience != "owner":
+            raise ToolError("Only in a private conversation with your owner can you set something for another place. Here, use scope 'here' or 'person'.")
+        words = [word for word in re.findall(r"\w+", where.casefold()) if word]
+        rows = self.store.q(
+            "SELECT place, place_label, MAX(ts) AS ts FROM journal WHERE place!=? AND COALESCE(place_label,'')!='' AND COALESCE(mode,'')!='overheard' "
+            "GROUP BY place ORDER BY ts DESC LIMIT 60", (scene.place,))
+        matches = [row for row in rows if words and all(word in row["place_label"].casefold() for word in words)]
+        if len(matches) != 1:
+            names = "; ".join(row["place_label"] for row in (matches or rows)[:8]) or "none yet"
+            problem = f"More than one of your places matches '{where}'" if matches else f"None of your places is called '{where}'"
+            raise ToolError(f"{problem}. Your places: {names}. Give enough of one name to pick it.")
+        target = self._scene_for_place(scene.session, matches[0]["place"])
+        thought_id = self.memory.thought_add(target, "followup", about, due, "here", None, every, {"sent_by_owner": True})
+        when = brief.local_now(self.config).fromtimestamp(due, brief.local_now(self.config).tzinfo).strftime("%a %H:%M")
+        note = "" if target.surface == "slack" else " That place cannot wake you on its own, so you will see it on the next message there after it is due."
+        return f"Held as follow-up #{thought_id}, due {when}. It will come back to you in {target.place_label}, the next time you are active there.{note}"
 
     def _agenda(self, scene: Scene, show: str = "all") -> str:
         lines = []

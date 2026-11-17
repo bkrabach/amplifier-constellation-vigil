@@ -610,6 +610,57 @@ def test_only_a_thought_held_for_this_place_schedules_a_wake(memory: Memory):
     assert mind._next_wake(scene_for(memory, "slack:T1:C2", "group", Who("slack:T1", "U2", "Dana"))) is None
 
 
+def test_the_owner_can_send_the_agent_to_another_place_with_something_to_do(memory: Memory):
+    """On a voice call the owner asked the agent to take a more active part in the game. The
+    game could not be reached, so the agent held a follow-up for its owner. That kind waits
+    for a private conversation, and when the owner next spoke in the game the agent knew
+    nothing of it."""
+    from vigil.mcp import ToolError
+    from vigil.mind import Mind
+
+    class Bare(Mind):
+        def __init__(self, memory):
+            self.memory, self.store, self.config = memory, memory.store, memory.config
+
+    mind = Bare(memory)
+    game = scene_for(memory, "minecraft:world", "group", Who("minecraft", "Wren", "Wren"))
+    game.place_label, game.heard = "Minecraft in the Workshop world", "anyone seen the iron?"
+    memory.journal_add(game, "", "", "end_turn")
+    test_world = scene_for(memory, "minecraft:test", "group", Who("minecraft", "Wren", "Wren"))
+    test_world.place_label, test_world.heard = "Minecraft in the test world", "hello"
+    memory.journal_add(test_world, "", "", "end_turn")
+    call = scene_for(memory, "companion:olive", "owner", Who("slack:T1", "UOWNER", "Olive"))
+    call.place_label = "Call with P"
+
+    said = mind._follow_up(call, {"about": "Ask the builder for the layout. " * 20 + "Then report back.", "where": "test world"})
+    assert "Then report back." in compose(test_world, memory, memory.config)[0]  # the whole request reaches the place, not its first lines
+    memory.thought_cancel(call, memory.thoughts_due(test_world)[0]["id"])
+    said = mind._follow_up(call, {"about": "Take the lead on the door: get the builder's design approved and help wire it.", "where": "workshop minecraft"})
+    assert "It will come back to you in Minecraft in the Workshop world" in said and "cannot wake you" in said
+    # it waits in that place, not with the owner and not in any other place
+    assert memory.thoughts_due(call) == [] and memory.thoughts_due(test_world) == []
+    due = memory.thoughts_due(game)
+    assert [thought["text"] for thought in due] == ["Take the lead on the door: get the builder's design approved and help wire it."]
+    text, surfaced = compose(game, memory, memory.config)
+    assert surfaced == [due[0]["id"]] and "your owner asked this of you in private, and you set it for this place" in text
+    assert f"follow-up #{due[0]['id']}" in mind._agenda(game) and f"follow-up #{due[0]['id']}" in mind._agenda(call)
+    # a name that fits two places, or none, is refused with the names to choose from
+    with pytest.raises(ToolError) as refused:
+        mind._follow_up(call, {"about": "x", "where": "Minecraft"})
+    assert "More than one of your places matches 'Minecraft'" in str(refused.value)
+    assert "Minecraft in the Workshop world" in str(refused.value) and "Minecraft in the test world" in str(refused.value)
+    with pytest.raises(ToolError, match="None of your places is called 'the office'. Your places: "):
+        mind._follow_up(call, {"about": "x", "where": "the office"})
+    # one room's talk does not travel to another: only the owner, in private, sends the agent elsewhere
+    channel = scene_for(memory, "slack:T1:C1", "group", Who("slack:T1", "U2", "Dana"))
+    with pytest.raises(ToolError, match="Only in a private conversation with your owner"):
+        mind._follow_up(channel, {"about": "tell the game what Dana said", "where": "workshop"})
+    direct = scene_for(memory, "slack:T1:D2", "dm", Who("slack:T1", "U2", "Dana"))
+    with pytest.raises(ToolError, match="Only in a private conversation with your owner"):
+        mind._follow_up(direct, {"about": "tell the game what Dana said", "where": "workshop"})
+    assert len(memory.thoughts_pending()) == 1
+
+
 def test_one_wake_is_armed_per_place_not_one_per_turn(memory: Memory, monkeypatch):
     import asyncio
 

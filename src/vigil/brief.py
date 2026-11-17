@@ -198,9 +198,12 @@ def compose(scene: Scene, memory: Memory, config: Config, extras: dict[str, Any]
         for thought in due:
             delivered.append(thought["id"])
             label = {"followup": "a follow-up you set", "task": "background work you delegated has finished", "held": "you were holding this"}.get(thought["kind"], thought["kind"])
+            sent = thought["kind"] == "followup" and '"sent_by_owner": true' in (thought.get("data") or "")
+            if sent:  # the whole of what the owner asked for, not the start of it
+                label = "your owner asked this of you in private, and you set it for this place"
             target = memory.name_of(thought["person"]) if thought["person"] else ""
             for_whom = f" for {target}" if target and thought["person"] != scene.actor_person else ""
-            add(f"- (#{thought['id']}, {label}{for_whom}, {ago(thought['ts'])}) {clip(thought['text'], 900 if thought['kind'] == 'task' else 320)}")
+            add(f"- (#{thought['id']}, {label}{for_whom}, {ago(thought['ts'])}) {clip(thought['text'], 900 if sent or thought['kind'] == 'task' else 320)}")
 
     for line in extras.get("lines") or []:
         add(line)
