@@ -55,6 +55,22 @@ def clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
+OWNER_WORK_CHARS = 900  # the most a place's brief shows of something the owner sent there
+
+
+def owner_work(thought: Any) -> bool:
+    """Something the owner sent the agent to do in a place: a one-time follow-up set
+    with 'where'. It is work, not a reminder, so one showing does not finish it: it
+    stays in that place's brief until the agent closes it."""
+    return thought["kind"] == "followup" and not thought["every_seconds"] and '"sent_by_owner": true' in (thought["data"] or "")
+
+
+def owner_work_seen(thought: Any) -> bool:
+    """Owner work the agent has already had in front of it in a turn that ended well.
+    Nothing new is waiting to be delivered, so it is no reason to wake a conversation."""
+    return owner_work(thought) and bool(thought["delivered"])
+
+
 class Memory:
     def __init__(self, store: Store, config: Config):
         self.store = store
@@ -539,10 +555,12 @@ class Memory:
 
     def thoughts_delivered(self, ids: list[int], session: str) -> None:
         for thought_id in ids:
-            row = self.store.one("SELECT every_seconds, due FROM thoughts WHERE id=?", (thought_id,))
+            row = self.store.one("SELECT * FROM thoughts WHERE id=?", (thought_id,))
             if not row:
                 continue
-            if row["every_seconds"]:
+            if owner_work(row):  # seen, and still open until the agent closes it
+                self.store.run("UPDATE thoughts SET delivered=?, delivered_session=? WHERE id=?", (now(), session, thought_id))
+            elif row["every_seconds"]:
                 due = row["due"]
                 while due <= now():
                     due += row["every_seconds"]

@@ -15,7 +15,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from .config import Config
-from .memory import Memory, clip
+from .memory import OWNER_WORK_CHARS, Memory, clip, owner_work
 from .surfaces import Scene
 
 OPEN = "[Vigil presence brief]"
@@ -191,19 +191,25 @@ def compose(scene: Scene, memory: Memory, config: Config, extras: dict[str, Any]
                 tail = f' You: "{said}"' if said else ""
                 add(f'- {ago(row["ts"])}, {row["place_label"] or row["surface"]}{there}, {row["actor_name"] or "someone"}: "{heard}".{tail}', "elsewhere")
 
-    due = memory.thoughts_due(scene)
-    delivered: list[int] = []
+    pending = memory.thoughts_due(scene)
+    delivered: list[int] = [thought["id"] for thought in pending]
+    work = [thought for thought in pending if owner_work(thought)]
+    due = [thought for thought in pending if not owner_work(thought)]
+    if work:
+        add("Your owner asked this of you in private, and you set it for this place. It is work to carry forward when the moment allows, not something to raise on every turn. "
+            "It stays in this brief until you close it with mind_cancel (kind follow_up, its id), once it is done or your owner withdraws it:")
+        for thought in work:
+            add(f"- (#{thought['id']}, set {ago(thought['ts'])}) {clip(thought['text'], OWNER_WORK_CHARS)}")
     if due:
         add("To bring up now, in your own words. Skip any that no longer fit:")
         for thought in due:
-            delivered.append(thought["id"])
             label = {"followup": "a follow-up you set", "task": "background work you delegated has finished", "held": "you were holding this"}.get(thought["kind"], thought["kind"])
             sent = thought["kind"] == "followup" and '"sent_by_owner": true' in (thought.get("data") or "")
-            if sent:  # the whole of what the owner asked for, not the start of it
+            if sent:  # a repeating one the owner set for this place
                 label = "your owner asked this of you in private, and you set it for this place"
             target = memory.name_of(thought["person"]) if thought["person"] else ""
             for_whom = f" for {target}" if target and thought["person"] != scene.actor_person else ""
-            add(f"- (#{thought['id']}, {label}{for_whom}, {ago(thought['ts'])}) {clip(thought['text'], 900 if sent or thought['kind'] == 'task' else 320)}")
+            add(f"- (#{thought['id']}, {label}{for_whom}, {ago(thought['ts'])}) {clip(thought['text'], OWNER_WORK_CHARS if sent or thought['kind'] == 'task' else 320)}")
 
     for line in extras.get("lines") or []:
         add(line)

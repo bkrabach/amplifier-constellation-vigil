@@ -25,7 +25,7 @@ import aiohttp
 from . import bridges, brief, decisions, prompts, surfaces
 from .conductor import VIGIL_META, RuntimeProc
 from .mcp import ToolError, call_tool
-from .memory import Memory, clip
+from .memory import OWNER_WORK_CHARS, Memory, clip, owner_work_seen
 from .store import now
 from .surfaces import Scene
 
@@ -494,7 +494,7 @@ class Mind:
         try:
             if scene.wake:
                 self.store.meta_set(f"wake:{scene.place}", "0")
-            if scene.mode == "continuation" and scene.wake and not self.memory.thoughts_due(scene):
+            if scene.mode == "continuation" and scene.wake and all(owner_work_seen(thought) for thought in self.memory.thoughts_due(scene)):
                 # Our own wake-up, and nothing is ready: answer it without a model call.
                 await self._arm_wake(sid, scene, None)
                 self.store.event_finish(event, "done", {"wake": "quiet"})
@@ -652,7 +652,7 @@ class Mind:
         that person speaks, and a wake-up with nobody speaking cannot deliver it."""
         soonest: float | None = None
         for thought in self.memory.thoughts_pending(scene.place):
-            if thought["scope"] != "here":
+            if thought["scope"] != "here" or owner_work_seen(thought):
                 continue
             wait = max(0.0, thought["due"] - now())
             soonest = wait if soonest is None else min(soonest, wait)
@@ -849,6 +849,12 @@ class Mind:
         conversation can set one; anything else would carry one room's talk into another."""
         if scene.audience != "owner":
             raise ToolError("Only in a private conversation with your owner can you set something for another place. Here, use scope 'here' or 'person'.")
+        length = len(" ".join(about.split()))
+        if length > OWNER_WORK_CHARS:
+            # Refused here, where it can be rewritten, so that the place never shows a cut-off task.
+            raise ToolError(
+                f"That is {length} characters, and the brief in another place shows at most {OWNER_WORK_CHARS} of something set for it. "
+                "Write it shorter: what to do there and what your owner wants to hear back. Leave out background you will find in that place.")
         words = [word for word in re.findall(r"\w+", where.casefold()) if word]
         rows = self.store.q(
             "SELECT place, place_label, MAX(ts) AS ts FROM journal WHERE place!=? AND COALESCE(place_label,'')!='' AND COALESCE(mode,'')!='overheard' "
@@ -862,7 +868,8 @@ class Mind:
         thought_id = self.memory.thought_add(target, "followup", about, due, "here", None, every, {"sent_by_owner": True})
         when = brief.local_now(self.config).fromtimestamp(due, brief.local_now(self.config).tzinfo).strftime("%a %H:%M")
         note = "" if target.surface == "slack" else " That place cannot wake you on its own, so you will see it on the next message there after it is due."
-        return f"Held as follow-up #{thought_id}, due {when}. It will come back to you in {target.place_label}, the next time you are active there.{note}"
+        stays = "" if every else " It stays in your brief there until you close it with mind_cancel."
+        return f"Held as follow-up #{thought_id}, due {when}. It will come back to you in {target.place_label}, the next time you are active there.{stays}{note}"
 
     def _agenda(self, scene: Scene, show: str = "all") -> str:
         lines = []
