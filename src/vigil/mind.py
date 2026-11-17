@@ -12,6 +12,7 @@ model. A wake-up with nothing to deliver ends without a model call.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import datetime
 import json
 import logging
@@ -194,15 +195,24 @@ TOOLS_MISSING = (
 )
 
 
+#: Where an experience gives the agent tools to speak with, by surface. In such a place
+#: what the agent said is what went through those tools, not the text that ends its turn.
+SPEECH_TOOLS = {"minecraft": ("minecraft", frozenset({"chat", "tell"}))}
+
+
 class Turn:
     """What the runtime produced during one prompt, as seen passing through."""
 
-    def __init__(self) -> None:
+    def __init__(self, speech: tuple[str, frozenset[str]] | None = None) -> None:
         self.messages: dict[str, dict[str, str]] = {}
         self.order: list[str] = []
         self.tools: list[str] = []
         self.own_follow_up = False
         self.cancelled = False
+        self.speech_server, self.speech_tools = speech or ("", frozenset())
+        self.speech_tried = False
+        self.spoke: list[str] = []
+        self._speech: dict[str, str] = {}
 
     def chunk(self, update: dict[str, Any]) -> None:
         content = update.get("content") or {}
@@ -224,6 +234,34 @@ class Turn:
             self.tools.append(name)
         if "slack_follow_up" in name or "slack follow up" in name.lower():
             self.own_follow_up = True
+        call = str(update.get("toolCallId") or "")
+        if call and name in self.speech_tools and raw.get("server") in (None, self.speech_server):
+            args = raw.get("arguments") if isinstance(raw.get("arguments"), dict) else raw
+            text = str(args.get("text") or "").strip()
+            if text:
+                self.speech_tried = True
+                to = str(args.get("player") or "").strip()
+                self._speech[call] = f"@{to} {text}" if to else text
+        # The call is announced with its arguments and settles in a later update that
+        # carries only its id. Speech counts once the experience reports it delivered.
+        if call in self._speech and update.get("status") in ("completed", "failed"):
+            text = self._speech.pop(call)
+            if update["status"] == "completed":
+                self.spoke.append(text)
+
+    def said(self, mode: str) -> str:
+        """What the people present were told this turn.
+
+        With speech tools, that is what those tools delivered. The text that ends the
+        turn reaches people only when a person spoke to the agent directly and it tried
+        no speech tool; after another agent's message or its own activity the connector
+        shows that text to nobody, and memory must not record it as said."""
+        final = spoken(self.final())
+        if not self.speech_tools:
+            return final
+        if self.spoke:
+            return "\n".join(self.spoke)
+        return "" if self.speech_tried or mode in ("ambient", "continuation") else final
 
     def final(self) -> str:
         for key in reversed(self.order):
@@ -429,6 +467,13 @@ class Mind:
         added = surfaces.steering_heard(params.get("prompt") or [], names)
         if added:
             scene.heard = surfaces.with_updates(scene.heard, added)
+        if scene.surface == "minecraft" and scene.audience == "group":
+            try:
+                lines = surfaces.steering_overheard(params.get("prompt") or [], scene.self_handle)
+                if lines:
+                    self.memory.overhear(dataclasses.replace(scene, overheard=lines))
+            except Exception:  # memory must never hold up input on its way to the runtime
+                log.exception("session %s: could not keep chat that arrived during a turn", sid)
 
     # ---- a turn --------------------------------------------------------------------
     async def prompt(self, link: Any, params: dict[str, Any]) -> Any:
@@ -444,7 +489,7 @@ class Mind:
         self._label(scene)
         self.memory.overhear(scene)
         self.scenes[sid] = scene
-        turn = self.turns[sid] = Turn()
+        turn = self.turns[sid] = Turn(SPEECH_TOOLS.get(scene.surface))
         event = self.store.event_begin("prompt", sid, scene.place, {"surface": scene.surface, "mode": scene.mode, "audience": scene.audience})
         try:
             if scene.wake:
@@ -482,8 +527,8 @@ class Mind:
             result = await link.runtime.request("session/prompt", params)
 
             stop = (result or {}).get("stopReason") or ""
-            said = spoken(turn.final())
-            if surfaced and said and stop == "end_turn":
+            said = turn.said(scene.mode)
+            if surfaced and (said or spoken(turn.final())) and stop == "end_turn":
                 self.memory.thoughts_delivered(surfaced, sid)
             if scene.heard or said:
                 self.memory.journal_add(scene, said, ", ".join(turn.tools[:8]), stop)
