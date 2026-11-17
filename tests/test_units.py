@@ -642,8 +642,33 @@ def test_the_owner_can_send_the_agent_to_another_place_with_something_to_do(memo
     due = memory.thoughts_due(game)
     assert [thought["text"] for thought in due] == ["Take the lead on the door: get the builder's design approved and help wire it."]
     text, surfaced = compose(game, memory, memory.config)
-    assert surfaced == [due[0]["id"]] and "your owner asked this of you in private, and you set it for this place" in text
+    assert surfaced == [due[0]["id"]] and "Your owner asked this of you in private, and you set it for this place" in text
     assert f"follow-up #{due[0]['id']}" in mind._agenda(game) and f"follow-up #{due[0]['id']}" in mind._agenda(call)
+    # It is work, not a reminder: a turn in which the agent speaks does not finish it. On a
+    # live agent the request covered a door, then two smaller jobs, and would have left the
+    # brief after the first line of chat.
+    memory.thoughts_delivered(surfaced, "s")
+    again, surfaced = compose(game, memory, memory.config)
+    assert surfaced == [due[0]["id"]] and "Take the lead on the door" in again and "mind_cancel" in again
+    assert "To bring up now" not in again  # nothing else is waiting
+    assert mind._next_wake(game) is None  # and having been seen, it is no reason to wake the place
+    # the agent closes it from the place it was set for
+    stranger = scene_for(memory, "slack:T1:C9", "group", Who("slack:T1", "U2", "Dana"))
+    assert not memory.thought_cancel(stranger, due[0]["id"]) and memory.thought_cancel(game, due[0]["id"])
+    assert "Take the lead on the door" not in compose(game, memory, memory.config)[0]
+    said = mind._follow_up(call, {"about": "Take the lead on the door: get the builder's design approved and help wire it.", "where": "workshop minecraft"})
+    assert "until you close it with mind_cancel" in said
+    # Too long to be shown whole is refused where it can be rewritten. The live agent wrote
+    # 1,667 characters and the place would have shown the first 900, without what to report.
+    with pytest.raises(ToolError, match="That is 1314 characters, and the brief in another place shows at most 900"):
+        mind._follow_up(call, {"about": "Ask the builder for the layout. " * 40 + "Then report back to me in private.", "where": "test world"})
+    # one that repeats is a reminder: shown when due, then again after its interval
+    mind._follow_up(call, {"about": "Count the iron in the chest.", "where": "test world", "repeat_every_minutes": 60})
+    text, surfaced = compose(test_world, memory, memory.config)
+    assert "To bring up now" in text and "Count the iron" in text
+    memory.thoughts_delivered(surfaced, "s")
+    assert "Count the iron" not in compose(test_world, memory, memory.config)[0]
+    memory.thought_cancel(call, surfaced[0])
     # a name that fits two places, or none, is refused with the names to choose from
     with pytest.raises(ToolError) as refused:
         mind._follow_up(call, {"about": "x", "where": "Minecraft"})
