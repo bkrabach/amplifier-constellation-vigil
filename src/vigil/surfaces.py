@@ -13,6 +13,7 @@ orientation. Adapter text is the fallback.
 
 from __future__ import annotations
 
+import datetime
 import json
 import re
 from dataclasses import asdict, dataclass, field
@@ -27,6 +28,9 @@ _SLACK_MARK = "Latest conversation projection:\n"
 #: A Slack update that arrives while a turn is running: guidance, this line, then one JSON
 #: object with the original `trigger` and, for a peer's message, an `awareness_input`.
 _SLACK_UPDATE = "Incremental conversation update:\n"
+#: A game update that arrives while a turn is running: guidance, then one JSON object
+#: whose `messages` are the public chat lines said since the last one.
+_GAME_UPDATE = "Public Minecraft conversation updates"
 _ROOM = re.compile(r"Room participants: (\{.*?\})\. Human speaker: (.*?)\. Trigger message: ", re.S)
 
 #: Vigil's own follow-up marker, placed in the goal of an adapter-scheduled continuation
@@ -261,6 +265,33 @@ def _conversations(scene: Scene, text: str, meta: dict[str, Any]) -> bool:
     return True
 
 
+def _game_line(message: Any, self_handle: str | None) -> tuple[str, Who, str, float] | None:
+    """One public line of game chat from someone else, as an overheard entry.
+
+    The connector writes a chat line two ways: `username` and `message` for the message
+    that starts a turn and for the human words that authorise activity, `author` and
+    `text` for the room's recent conversation and for updates during a turn. A line
+    without an id cannot be kept once, so it is left out."""
+    if not isinstance(message, dict) or not message.get("id") or message.get("whisper"):
+        return None
+    who = str(message.get("author") or message.get("username") or "")
+    text = str(message.get("text") or message.get("message") or "")
+    source = str(message.get("source") or "human")
+    if not who or who == self_handle or not text.strip() or source not in ("human", "agent"):
+        return None
+    at = 0.0
+    fact = message.get("source_fact")
+    stamp = fact.get("occurredAt") if isinstance(fact, dict) else None
+    if isinstance(stamp, (int, float)) and not isinstance(stamp, bool):
+        at = stamp / 1000.0
+    elif isinstance(message.get("time"), str):
+        try:
+            at = datetime.datetime.fromisoformat(message["time"].replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            at = 0.0
+    return (f"minecraft:{message['id']}", Who("minecraft", who, who, source == "agent"), text[:4000], at)
+
+
 def _minecraft(scene: Scene, texts: list[str]) -> bool:
     if not texts or not texts[0].startswith("Current adapter permission policy for this turn:"):
         return False
@@ -313,6 +344,20 @@ def _minecraft(scene: Scene, texts: list[str]) -> bool:
             scene.mode = "ambient" if source == "activity" else "continuation"
     if world.get("ambient_activity") or world.get("peer_proposal"):
         scene.mode = "ambient"
+    if scene.audience == "group":
+        # The connector starts a turn for some chat lines and holds the rest. Held lines
+        # reach the agent only here: the room's recent conversation, and the human words
+        # that authorise its activity. A person's question can arrive no other way.
+        room = world.get("conversation") if isinstance(world.get("conversation"), dict) else {}
+        grants = world.get("task_capabilities") if isinstance(world.get("task_capabilities"), dict) else {}
+        seen = {entry[0] for entry in scene.overheard} | {scene.source_id}
+        lines = []
+        for message in [*(grants.get("delegation_sources") or []), *(room.get("messages") or [])]:
+            entry = _game_line(message, scene.self_handle)
+            if entry and entry[0] not in seen:
+                seen.add(entry[0])
+                lines.append(entry)
+        scene.overheard.extend(sorted(lines, key=lambda entry: entry[3])[-40:])
     return True
 
 
@@ -363,14 +408,41 @@ def steering_heard(blocks: list[Any], names: dict[str, str] | None = None) -> st
             data = _json_tail(text, at + 1) if at >= 0 else None
             messages = data.get("messages") if isinstance(data, dict) else None
             if isinstance(messages, list):
+                game = text.startswith(_GAME_UPDATE)
                 for message in messages:
-                    if isinstance(message, dict) and message.get("message"):
-                        lines.append(f'{message.get("username") or "someone"}: {message["message"]}')
+                    if not isinstance(message, dict) or (game and _game_line(message, None)):
+                        continue  # steering_overheard keeps a game line under its speaker
+                    said = message.get("message") or message.get("text")
+                    if said:
+                        lines.append(f'{message.get("username") or message.get("author") or "someone"}: {said}')
                 continue
             lines.append(text.strip()[:1500])
         except Exception:  # a reader must never break a turn
             continue
     return "\n".join(lines)
+
+
+def steering_overheard(blocks: list[Any], self_handle: str | None = None) -> list[tuple[str, Who, str, float]]:
+    """Game chat that arrives while a turn is running, as overheard entries.
+
+    The game connector sends each public line said during a turn as an update, and does
+    not start a turn for it afterwards. Each line has its own speaker and id, so memory
+    keeps it once, under the person who said it. Never raises."""
+    found: list[tuple[str, Who, str, float]] = []
+    for block in blocks or []:
+        try:
+            text = str(block.get("text") or "") if isinstance(block, dict) and block.get("type") == "text" else ""
+            if not text.startswith(_GAME_UPDATE):
+                continue
+            at = text.find("\n{")
+            data = _json_tail(text, at + 1) if at >= 0 else None
+            for message in (data.get("messages") or []) if isinstance(data, dict) else []:
+                entry = _game_line(message, self_handle)
+                if entry:
+                    found.append(entry)
+        except Exception:  # a reader must never break a turn
+            continue
+    return found
 
 
 def with_updates(heard: str, added: str, limit: int = 4000) -> str:

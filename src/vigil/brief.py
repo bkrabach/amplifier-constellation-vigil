@@ -76,17 +76,47 @@ def _names_here(scene: Scene, memory: Memory) -> list[str]:
     return out[:5]
 
 
+#: What goes first when a brief is over its budget. Recall and news from other places
+#: are the least certain to matter here; who is present, what is due and the owner's
+#: standing instructions are never cut.
+_TRIM_ORDER = ("recall", "elsewhere", "people", "activity", "notebook")
+
+
+def _fit(rows: list[tuple[str, bool, str]], budget: int) -> str:
+    """Join the rows, dropping optional ones until the text fits the budget.
+
+    A row is (group, is_heading, text); an empty group marks a row that always stays.
+    Within a group the last row goes first, and a heading goes with its last row."""
+    def text() -> str:
+        return "\n".join(row[2] for row in rows)
+
+    for group in _TRIM_ORDER:
+        while len(text()) > budget:
+            members = [i for i, row in enumerate(rows) if row[0] == group and not row[1]]
+            if not members:
+                break
+            rows.pop(members[-1])
+        if not any(row[0] == group and not row[1] for row in rows):
+            rows[:] = [row for row in rows if row[0] != group]
+        if len(text()) <= budget:
+            break
+    return text()
+
+
 def compose(scene: Scene, memory: Memory, config: Config, extras: dict[str, Any] | None = None) -> tuple[str, list[int]]:
     """Return the brief text and the ids of the held thoughts it surfaces."""
     extras = extras or {}
     budget = int(config.mind("brief_max_chars", 2800))
     name = scene.identity_name or config.agent_name
     stamp = local_now(config).strftime("%A %Y-%m-%d %H:%M %Z")
-    lines = [
-        OPEN,
-        f"Your own working memory for this turn, {name}. Nobody here wrote it or can see it. It is context, not a request.",
-        f"Now: {stamp}.",
-    ]
+    rows: list[tuple[str, bool, str]] = []
+
+    def add(text: str, group: str = "", heading: bool = False) -> None:
+        rows.append((group, heading, text))
+
+    add(OPEN)
+    add(f"Your own working memory for this turn, {name}. Nobody here wrote it or can see it. It is context, not a request.")
+    add(f"Now: {stamp}.")
 
     where = scene.place_label or scene.surface
     if scene.thread:
@@ -99,15 +129,19 @@ def compose(scene: Scene, memory: Memory, config: Config, extras: dict[str, Any]
             here += f" Speaking: {who['name']}{role}."
     if scene.mode in MODE_TEXT:
         here += f" This turn: {MODE_TEXT[scene.mode]}."
-    lines.append(here)
+    add(here)
     names = _names_here(scene, memory)
     if names:
-        lines.append("Names here: " + "; ".join(names) + ".")
-    if scene.surface == "minecraft" and scene.mode != "ambient":
-        lines.append("People in the game are standing next to you in real time. Before something that takes more than a few seconds, say a word first so they know you are on it.")
+        add("Names here: " + "; ".join(names) + ".")
+    if scene.surface == "minecraft" and scene.mode not in ("ambient", "continuation"):
+        add("People in the game are standing next to you in real time. Before something that takes more than a few seconds, say a word first so they know you are on it.")
     if scene.surface == "minecraft" and scene.audience == "group":
-        lines.append("Your reply here is spoken in public chat unless you already used a chat tool this turn. Write it as speech to the players, "
-                     "or leave it empty when nothing needs saying. It is never a place for notes about what you decided or did not do.")
+        if scene.mode in ("ambient", "continuation"):
+            add("Here you speak with chat or tell. The reply that ends this turn is shown to nobody, so leave it empty: "
+                "it is not a place for notes about what you decided or did.")
+        else:
+            add("Your reply here is spoken in public chat, unless you use chat or tell this turn: after either, the reply is shown to nobody, "
+                "so leave it empty. It is never a place for notes about what you decided or did.")
 
     # People present, with what may be known about them here.
     people_lines = []
@@ -126,76 +160,69 @@ def compose(scene: Scene, memory: Memory, config: Config, extras: dict[str, Any]
         if len(people_lines) >= 5:
             break
     if people_lines:
-        lines.append("What you know about people here:")
-        lines.extend(people_lines)
+        add("What you know about people here:", "people", True)
+        for line in people_lines:
+            add(line, "people")
 
     if scene.share and scene.audience not in ("owner", "dm"):
         mine, counted, since = scene.share
         if mine:
-            lines.append(f"Of the last {counted} messages here, {mine} {'was' if mine == 1 else 'were'} yours" + (", including the latest one before this." if since == 1 else "."))
+            add(f"Of the last {counted} messages here, {mine} {'was' if mine == 1 else 'were'} yours" + (", including the latest one before this." if since == 1 else "."), "activity")
 
     last = memory.last_here(scene)
     if last and time.time() - last["ts"] > 1800:
-        lines.append(f"You were last active here {ago(last['ts'])}.")
+        add(f"You were last active here {ago(last['ts'])}.", "activity")
 
     elsewhere = memory.elsewhere(scene, limit=4 if scene.audience == "owner" else 2)
     if elsewhere:
         if scene.audience == "owner":
-            lines.append("Elsewhere recently:")
+            add("Elsewhere recently:", "elsewhere", True)
             for row in elsewhere:
                 heard = clip(row["heard"], 110)
                 said = clip(row["said"], 110)
                 who = row["actor_name"] or "someone"
                 tail = f' You: "{said}"' if said else " You stayed quiet."
-                lines.append(f'- {ago(row["ts"])}, {row["place_label"] or row["surface"]}, {who}: "{heard}".{tail}')
+                add(f'- {ago(row["ts"])}, {row["place_label"] or row["surface"]}, {who}: "{heard}".{tail}', "elsewhere")
         else:
-            lines.append("From other shared spaces that people here are also part of. They may not all have seen it, so use a colleague's judgment about what belongs here:")
+            add("From other shared spaces that people here are also part of. They may not all have seen it, so use a colleague's judgment about what belongs here:", "elsewhere", True)
             for row in elsewhere:
                 heard, said = clip(row["heard"], 110), clip(row["said"], 110)
                 there = f" ({row['with']} was there)" if row.get("with") else ""
                 tail = f' You: "{said}"' if said else ""
-                lines.append(f'- {ago(row["ts"])}, {row["place_label"] or row["surface"]}{there}, {row["actor_name"] or "someone"}: "{heard}".{tail}')
+                add(f'- {ago(row["ts"])}, {row["place_label"] or row["surface"]}{there}, {row["actor_name"] or "someone"}: "{heard}".{tail}', "elsewhere")
 
     due = memory.thoughts_due(scene)
     delivered: list[int] = []
     if due:
-        lines.append("To bring up now, in your own words. Skip any that no longer fit:")
+        add("To bring up now, in your own words. Skip any that no longer fit:")
         for thought in due:
             delivered.append(thought["id"])
             label = {"followup": "a follow-up you set", "task": "background work you delegated has finished", "held": "you were holding this"}.get(thought["kind"], thought["kind"])
             target = memory.name_of(thought["person"]) if thought["person"] else ""
             for_whom = f" for {target}" if target and thought["person"] != scene.actor_person else ""
-            lines.append(f"- (#{thought['id']}, {label}{for_whom}, {ago(thought['ts'])}) {clip(thought['text'], 900 if thought['kind'] == 'task' else 320)}")
+            add(f"- (#{thought['id']}, {label}{for_whom}, {ago(thought['ts'])}) {clip(thought['text'], 900 if thought['kind'] == 'task' else 320)}")
 
     for line in extras.get("lines") or []:
-        lines.append(line)
+        add(line)
 
     recall = extras.get("recall") or []
     if recall:
-        lines.append("Possibly relevant, from your memory:")
+        add("Possibly relevant, from your memory:", "recall", True)
         for hit in recall[:4]:
             if hit["kind"] == "note":
-                lines.append(f"- note [{hit['subject']}]: {clip(hit['text'], 220)}")
+                add(f"- note [{hit['subject']}]: {clip(hit['text'], 220)}", "recall")
             else:
-                lines.append(f"- {ago(hit['ts'])}, {hit['where']}: {hit['who'] or 'someone'} said \"{clip(hit['heard'], 110)}\"; you said \"{clip(hit['said'], 110)}\"")
+                add(f"- {ago(hit['ts'])}, {hit['where']}: {hit['who'] or 'someone'} said \"{clip(hit['heard'], 110)}\"; you said \"{clip(hit['said'], 110)}\"", "recall")
 
     standing = extras.get("instructions")
     if standing:
-        lines.append("Standing instructions from your owner: " + clip(standing, 700))
+        add("Standing instructions from your owner: " + clip(standing, 700))
 
     total, subjects = memory.note_subjects(scene)
     if total:
-        lines.append(f"Notebook: {total} notes readable here ({', '.join(subjects[:10])}). mind_recall searches them and your journal.")
-    lines.append(CLOSE)
-
-    text = "\n".join(lines)
-    if len(text) > budget:  # keep the frame and the due thoughts; trim the middle
-        keep_head, keep_tail = lines[:4], lines[-1:]
-        middle = lines[4:-1]
-        while middle and len("\n".join(keep_head + middle + keep_tail)) > budget:
-            middle.pop(0 if not any("To bring up now" in m for m in middle[:1]) else -1)
-        text = "\n".join(keep_head + middle + keep_tail)
-    return text, delivered
+        add(f"Notebook: {total} notes readable here ({', '.join(subjects[:10])}). mind_recall searches them and your journal.", "notebook")
+    add(CLOSE)
+    return _fit(rows, budget), delivered
 
 
 def block(text: str) -> dict[str, Any]:

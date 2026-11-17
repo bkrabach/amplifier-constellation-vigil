@@ -32,7 +32,9 @@ This follows the five primitives in Anthropic's *Building always-on agents*: an 
 4. **Decide by reflex.** Rules first: a greeting needs low effort and no recall. Otherwise one request to a decision model asks two typed questions at once: how much reasoning the message needs, and whether answering depends on earlier context. The effort answer sets the runtime's `thought_level` session option for this turn. The recall answer decides whether to search memory.
 5. **Write the presence brief** and append it as the last prompt block.
 6. **Let the runtime work.** Updates stream back to the experience unchanged.
-7. **Record.** The exchange goes into the journal, delivered thoughts are marked, and if something is still owed in this Slack conversation the wake-up is armed.
+7. **Record.** The exchange goes into the journal, delivered thoughts are marked, and if something is still owed in this Slack conversation the wake-up is armed. What the journal keeps as said is what reached people. In the game that is what the chat tools delivered: the text that ends a turn there is posted only when a person spoke to the agent and it used no chat tool, and is shown to nobody otherwise.
+
+An experience also shows the agent things other people said without starting a turn for them: a room's recent messages beside a prompt, or a line said while a turn was running. The journal keeps each of those once, under the person who said it, so what a person said in a room can be found later whether or not the agent was the one being spoken to.
 
 ## The presence brief
 
@@ -42,7 +44,9 @@ Three details matter.
 
 It is appended *after* the person's content. The native engine derives a session's title from the first text it sees, and clients replay stored prompts when a session is loaded. Placing the brief last keeps titles and replays about what was said. Vigil also removes its brief from replayed history.
 
-It carries a context-snapshot key (`com.microsoft.amplifier.context-snapshot`). Runtimes that support that profile keep only the newest brief in the model's context, so a long conversation does not accumulate one brief per turn.
+It carries a context-snapshot key (`com.microsoft.amplifier.context-snapshot`). A runtime that supports that profile can keep only the newest brief in the model's context, so a long conversation does not accumulate one brief per turn. How far a runtime goes is its own choice: the native engine does this until it first compacts a session through the provider, and from then on keeps each turn's blocks whole until the next compaction.
+
+It has a budget (`mind.brief_max_chars`, 2,800 characters by default). When a brief is over it, the lines least certain to matter go first: recalled notes, then news from other places, then notes about the people present. Who is speaking, who is who, how a reply is delivered here, what is due and the owner's standing instructions are never cut.
 
 It tells the model that it is the agent's own working memory, that nobody in the conversation wrote it, and that it is context, not a request. Prompting guidance for current models warns that text arriving next to a user's message can be read as injected instructions; saying plainly what the block is avoids that.
 
