@@ -1,3 +1,3 @@
 """Vigil: an always-on mind for a Constellation Agent Instance."""
 
-__version__ = "0.1.4"
+__version__ = "0.1.5"
