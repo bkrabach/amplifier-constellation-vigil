@@ -844,6 +844,41 @@ def test_the_default_engine_is_pinned_for_both_linux_platforms():
         assert all(len(entry[key]) == 64 for key in ("asset_sha256", "binary_sha256"))
 
 
+def test_web_tools_are_granted_and_taken_away_in_the_home_configuration(tmp_path: Path, monkeypatch):
+    """On a live agent someone posted a link and the agent could not open it: the engine
+    can let the model provider read a page, but nothing in a Vigil home could say so."""
+    import json
+
+    from vigil import engine
+
+    held = {"provider": {"kind": "anthropic", "model": "claude-opus-5-5", "native": {"tools": [{"type": "web_search_20260209", "name": "web_search"}]}},
+            "limits": {}, "allowed_mcp_mutations": [], "trusted_mcp_readonly_urls": []}
+    written = []
+
+    def fake_run(config, *args, stdin=None):
+        if args[0] == "configure":
+            written.append(json.loads(Path(args[-1]).read_text()))
+        return ""
+
+    monkeypatch.setattr(engine, "inspect", lambda config: {"revision": "r1", "config": json.loads(json.dumps(held))})
+    monkeypatch.setattr(engine, "_run", fake_run)
+    base = '[agent]\nname="P"\n[owner]\nname="Olive"\nos_user="olive"\n'
+
+    def apply(extra: str) -> dict:
+        (tmp_path / "vigil.toml").write_text(base + extra)
+        engine.apply_settings(Config.load(tmp_path))
+        return written[-1]["provider"]["native"]
+
+    fetch = {"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": 5}
+    granted = apply('[engine]\nnative_tools = [{ type = "web_fetch_20260209", name = "web_fetch", max_uses = 5 }]\n')
+    assert granted["tools"] == [fetch] and granted["pdf_input"] is True  # the list in the home is the whole grant
+    assert apply("[engine]\nnative_tools = []\n")["tools"] == []  # an empty list takes it away
+    assert apply("")["tools"] == held["provider"]["native"]["tools"]  # no setting: what the engine holds is left alone
+    assert apply('[engine]\nnative_betas = ["web-fetch-2025-09-10"]\n')["anthropic_betas"] == ["web-fetch-2025-09-10"]
+    with pytest.raises(RuntimeError, match="native_tools must be a list of tables"):
+        apply('[engine]\nnative_tools = ["web_fetch"]\n')
+
+
 def test_the_standing_instructions_say_what_the_agent_runs_on():
     text = prompts.instructions("claude-opus-5-5")
     assert "core, Vigil," in text and "Constellation native runtime (not the Amplifier CLI)" in text

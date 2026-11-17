@@ -157,6 +157,21 @@ allowed_mcp_mutations = ["https://slack-connector.example:18444/context/mcp#slac
 
 Run `vigil engine apply` after changing these. Without the first, the agent cannot search a channel it is asked about; without the second, every emoji reaction waits for someone's approval.
 
+### Reading the web
+
+The agent cannot open a link until you let it. With the native engine, the model provider can read a page or search the web by itself, and the engine passes that through when the provider's tool is named in the home:
+
+```toml
+[engine]
+# Anthropic: read pages whose address someone gave it. Add web search with
+# { type = "web_search_20260209", name = "web_search", max_uses = 3 }
+native_tools = [{ type = "web_fetch_20260209", name = "web_fetch", max_uses = 5, max_content_tokens = 25000 }]
+```
+
+Run `vigil engine apply`, then restart when no turn is running. The list is the whole grant: `native_tools = []` takes it away, and with no setting Vigil leaves alone whatever the engine was given directly. The entries are the provider's own tool declarations (the engine's `docs/native-capabilities.md` lists what it accepts for OpenAI, Anthropic and Gemini); `native_betas` adds Anthropic beta headers for versions that need one.
+
+What this grants: the provider fetches the page, not this machine, so the agent's commands stay without network. Anthropic's web fetch reads only addresses that already appear in the conversation, which keeps a page from steering the agent to an address of its own making; web search has no such limit and costs per search. Either way a page is something a stranger wrote, read by an agent that holds people's memories, so grant it for agents whose rooms you trust. Checked on the real provider with the pinned engine: a page read, a follow-up question in the same conversation, and a compaction with the page in the window. A fetched page stays in the conversation until the next compaction (about 60,000 characters at the limit above).
+
 ### A bridge from voice to the game
 
 ```toml

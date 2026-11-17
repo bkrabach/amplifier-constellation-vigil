@@ -94,6 +94,17 @@ Each game prompt is about 50,000 characters: the connector's observation is 36,0
 
 When the owner is in the game and the agent seems to know nothing of what they asked for elsewhere, look at what it is holding (`vigil status` gives the count; the `thoughts` table has the text and scope). A follow-up scoped to a person or to the owner waits for a private conversation, and public game chat is not one. From 0.1.7 the agent can set such a thing for the place it concerns, and from 0.1.8 it stays in that place's brief until the agent closes it. `tests/drive.py` with `--command` gives the owner-private turn that asks the agent to move one; check `vigil status` first, because that turn also delivers anything else held for the owner.
 
+## When the agent says it cannot do something
+
+Find which layer lacks it before changing anything, because each has a different owner. On a live agent four things came up in one Slack thread:
+
+- **It could not open a link.** The engine's provider tools were empty (`provider.native.tools` in the engine's `runtime.json`, shown by `vigil engine show`). That is Vigil's to set: `[engine] native_tools` in the home, then `vigil engine apply`. It changes the tool list, so each long conversation loses its compacted history once. The agent's commands have no network (`command_network`), and should not be given one for this.
+- **It could not read a large PDF.** The Slack connector refused the file ("Attachment exceeds the configured size limit"): its `media.max_file_bytes` cannot be set above 2 MiB. Past the connector, the engine carries at most 16 MiB of base64 per file and 20 MiB per prompt. The agent told people the limit was a setting on its host that could be raised to 50 MB; neither part was true, and it had no way to know.
+- **It could not start a direct message.** No connector tool starts a conversation; the agent speaks where it was addressed, and `mind_follow_up` for a person waits until they next talk to it.
+- **It did not link to things in Slack.** The connector posts replies as standard Markdown, so `[words](address)` works, and its context tools return an address for each conversation and message. Nothing in the prompt says either.
+
+The last three belong to the connector. Report them to its owners with what you measured; do not teach Vigil a connector's limits in a prompt, where they go stale.
+
 ## Linking one of the owner's accounts
 
 Add the account to `[owner] identities` in `vigil.toml` and restart. The restart makes the account the owner's and, when the earlier person was known only through it, moves that person's history to the owner; `vigil people` shows the result. Before 0.1.4 the restart moved the account and left the history on a stranger with the old name.

@@ -223,6 +223,16 @@ def apply_settings(config: Config) -> dict[str, Any]:
         native.setdefault("image_input", True)
     if provider["kind"] in ("openai", "azure-openai", "anthropic", "gemini"):
         native.setdefault("pdf_input", True)
+    # Tools the model provider runs itself (reading a web page, searching the web) are
+    # a grant the owner makes by name. The list in vigil.toml is the whole grant: an
+    # empty list takes it away. With no setting, whatever the engine holds is left alone.
+    if "native_tools" in overrides:
+        tools = overrides["native_tools"] or []
+        if not isinstance(tools, list) or not all(isinstance(tool, dict) for tool in tools):
+            raise RuntimeError("[engine] native_tools must be a list of tables, one per provider tool.")
+        native["tools"] = [dict(tool) for tool in tools]
+    if "native_betas" in overrides:
+        native["anthropic_betas"] = [str(beta) for beta in overrides["native_betas"] or []]
     if native:
         provider["native"] = native
     efforts = ["low", "medium", "high"]
