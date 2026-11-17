@@ -26,6 +26,8 @@ workspace = {workspace}
 name = {owner_name}
 os_user = {os_user}
 # Accounts that are the owner, one per surface. Slack ids differ per workspace.
+# A one-to-one conversation with any of them is private to the owner, so list a game
+# name only where the server verifies who signs in.
 identities = [{identities}]
 
 [server]
@@ -191,20 +193,14 @@ def cmd_people(args: argparse.Namespace) -> None:
         row = store.one("SELECT claimed_person FROM identities WHERE surface=? AND handle=?", (args.surface, args.handle))
         if not row or not row["claimed_person"]:
             sys.exit("No pending claim for that identity.")
-        old = store.one("SELECT person FROM identities WHERE surface=? AND handle=?", (args.surface, args.handle))["person"]
-        store.run("UPDATE identities SET person=?, claimed_person=NULL, verified=1, evidence='confirmed by the owner' WHERE surface=? AND handle=?",
-                  (row["claimed_person"], args.surface, args.handle))
-        memory.merge(old, row["claimed_person"])
+        memory.assign(args.surface, args.handle, row["claimed_person"], "confirmed by the owner")
         print("Linked.")
         return
     if args.action == "link":
         person = memory.find_person(args.person)
         if not person:
             sys.exit(f"Nobody called {args.person}.")
-        old = store.one("SELECT person FROM identities WHERE surface=? AND handle=?", (args.surface, args.handle))
-        memory._bind(args.surface, args.handle, person, "", True, "linked by the owner", False)
-        if old and old["person"] != person:
-            memory.merge(old["person"], person)
+        memory.assign(args.surface, args.handle, person, "linked by the owner")
         print("Linked.")
         return
     for row in store.q("SELECT * FROM people ORDER BY is_owner DESC, name"):

@@ -55,6 +55,27 @@ def local_now(config: Config) -> datetime.datetime:
     return datetime.datetime.now(zone)
 
 
+def _names_here(scene: Scene, memory: Memory) -> list[str]:
+    """Who is who in a shared place where a linked person goes by another name, a game
+    name typically. Without it the agent is told its owner is speaking, sees a line
+    from a name it has never been given, and cannot tell that its owner is present."""
+    if scene.audience != "group":
+        return []
+    out: list[str] = []
+    for who in ([scene.actor] if scene.actor else []) + list(scene.participants):
+        person = memory.person(scene.people.get(f"{who.surface}|{who.handle}"))
+        shown = who.name or who.handle
+        if not person or not shown or not memory.known_here(scene, person):
+            continue
+        known = person["name"]
+        if known.casefold() in shown.casefold() or shown.casefold() in known.casefold():
+            continue
+        line = f"{shown} is {known}" + (" (your owner)" if person["is_owner"] else "")
+        if line not in out:
+            out.append(line)
+    return out[:5]
+
+
 def compose(scene: Scene, memory: Memory, config: Config, extras: dict[str, Any] | None = None) -> tuple[str, list[int]]:
     """Return the brief text and the ids of the held thoughts it surfaces."""
     extras = extras or {}
@@ -79,6 +100,9 @@ def compose(scene: Scene, memory: Memory, config: Config, extras: dict[str, Any]
     if scene.mode in MODE_TEXT:
         here += f" This turn: {MODE_TEXT[scene.mode]}."
     lines.append(here)
+    names = _names_here(scene, memory)
+    if names:
+        lines.append("Names here: " + "; ".join(names) + ".")
     if scene.surface == "minecraft" and scene.mode != "ambient":
         lines.append("People in the game are standing next to you in real time. Before something that takes more than a few seconds, say a word first so they know you are on it.")
     if scene.surface == "minecraft" and scene.audience == "group":
