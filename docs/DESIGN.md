@@ -68,7 +68,9 @@ In a scripted day across two channels, a thread, direct messages, a game world a
 
 ## People
 
-The same human has a different handle on every surface. A new handle becomes a new person; names alone never merge two people. A link takes effect only when something can vouch for it: the owner's configuration, an owner-private session, or the person asserting it from a surface with a stronger sign-in than the one being claimed (an OS login outranks a Slack account, which outranks an offline-mode Minecraft name). Any other claim is stored for the owner to confirm with `vigil people confirm` and unlocks nothing until then.
+The same human has a different handle on every surface. A new handle becomes a new person; names alone never merge two people. A link takes effect only when something can vouch for it: the owner's configuration, an owner-private session, or the person asserting it from a surface with a stronger sign-in than the one being claimed (an OS login outranks a Slack account, which outranks an offline-mode Minecraft name). Any other claim is stored for the owner to confirm with `vigil people confirm` and unlocks nothing until then. An account the owner holds can be changed only by the owner, in the configuration or in private.
+
+A link carries the history made under the linked account. Someone known only through that account becomes the same person, with what they said and what they were told. Someone who has other accounts keeps them and their history, so an earlier mistaken link cannot hand the new holder those accounts. In a shared place where a linked person goes by another name, a game name typically, the brief says who is who.
 
 ## Coming back
 

@@ -75,4 +75,12 @@ The reader's `heard` for a hand-off must equal that `request_text` with line bre
 
 The caller's wait is from their last word to the voice's first. On that call it was 12 and 19 seconds. About five seconds of each passed before the prompt reached Vigil: the Companion waits about two seconds for the transcript, and the request takes about three more to arrive. The rest is the model, so a large session or a turn with several tool calls is what the caller hears as silence.
 
+## Linking one of the owner's accounts
+
+Add the account to `[owner] identities` in `vigil.toml` and restart. The restart makes the account the owner's and, when the earlier person was known only through it, moves that person's history to the owner; `vigil people` shows the result. Before 0.1.4 the restart moved the account and left the history on a stranger with the old name.
+
+Decide first how far the place's sign-in can be trusted, because the link is more than a name. A one-to-one conversation with an owner account is owner-private, so in a game a whisper from that player name opens the owner's private memory. Public chat stays a group. Check the server, not the connector's log: the game connector's `signature_verified` flag says whether a chat message carried a verified signature, not whether the player signed in with a real account. What matters is where players enter, whether that entrance verifies the account, and whether the server's allow-list holds account ids or ids derived from the name. On one live server, people entered through a proxy that verified accounts, agents through a local proxy that did not, and the allow-list held the owner's account id, so the unverified entrance could not present the owner's name.
+
+Game accounts share one namespace, `minecraft`, across every world the agent joins. A linked name is the owner in all of them, so link a game name only when every world the agent joins verifies sign-in.
+
 When a surface changes its prompt format, update its reader and its test together. When you learn something that would have saved you time, put it in this file.

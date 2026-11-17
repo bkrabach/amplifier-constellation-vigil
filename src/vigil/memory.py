@@ -22,6 +22,7 @@ speaking) or "strict" (nothing crosses between places).
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 from typing import Any
@@ -29,6 +30,8 @@ from typing import Any
 from .config import Config
 from .store import Store, now
 from .surfaces import Scene, Who
+
+log = logging.getLogger("vigil.memory")
 
 #: How much a surface's own sign-in vouches for an identity. A claim made from a
 #: stronger surface about a weaker one is accepted; the reverse waits for the owner.
@@ -202,7 +205,26 @@ class Memory:
         if owner.get("os_user"):
             seeds += [{"surface": s, "handle": owner["os_user"]} for s in ("os", "conversations")]
         for seed in seeds:
-            self._bind(seed["surface"], seed["handle"], "owner", seed.get("name") or "", True, "configured by the owner", False)
+            known = self.store.one("SELECT is_agent FROM identities WHERE surface=? AND handle=?", (seed["surface"], seed["handle"]))
+            if known and known["is_agent"]:
+                # An account its place reports as an agent's is not the owner, whatever the file says.
+                log.warning("owner identity %s:%s is an agent's account; not linked", seed["surface"], seed["handle"])
+                continue
+            self.assign(seed["surface"], seed["handle"], "owner", "configured by the owner", seed.get("name") or "")
+
+    def assign(self, surface: str, handle: str, person: str, evidence: str, display: str = "") -> None:
+        """Make an identity this person's, and bring along the history made under it.
+
+        Whoever was known only through this identity is the same human, so what they
+        said and were told follows it. Someone with other accounts keeps those accounts
+        and their history: an earlier link may have been wrong, and folding them in
+        would hand ``person`` accounts that nothing here vouches for."""
+        row = self.store.one("SELECT person FROM identities WHERE surface=? AND handle=?", (surface, handle))
+        self._bind(surface, handle, person, display, True, evidence, False)
+        self.store.run("UPDATE identities SET claimed_person=NULL WHERE surface=? AND handle=?", (surface, handle))
+        old = row["person"] if row else None
+        if old and old != person and not self.store.one("SELECT 1 FROM identities WHERE person=?", (old,)):
+            self.merge(old, person)
 
     def _bind(self, surface: str, handle: str, person: str, display: str, verified: bool, evidence: str, is_agent: bool) -> None:
         self.store.run(
@@ -276,6 +298,10 @@ class Memory:
             return {"linked": True, "note": "already linked"}
         if target and target["is_agent"]:
             return {"linked": False, "note": "that identity belongs to an agent"}
+        if target and target["person"] == "owner" and scene.audience != "owner":
+            # A stronger sign-in vouches for the speaker, not for taking an account
+            # the owner already holds. No claim is stored either: there is nothing to confirm.
+            return {"linked": False, "note": "that identity is your owner's; only your owner, in private, can change it"}
         vouched = scene.audience == "owner" or (
             scene.actor_person == person_id and scene.actor is not None and _trust(scene.actor.surface) > _trust(surface)
         )
@@ -288,19 +314,27 @@ class Memory:
                 self._bind(surface, handle, placeholder, "", True, "claimed, not yet seen", False)
                 self.store.run("UPDATE identities SET claimed_person=?, evidence=? WHERE surface=? AND handle=?", (person_id, clip(evidence, 300), surface, handle))
             return {"linked": False, "note": "recorded as an unconfirmed claim; the owner can confirm it"}
-        old = target["person"] if target else None
-        self._bind(surface, handle, person_id, "", True, clip(evidence, 300), False)
-        self.store.run("UPDATE identities SET claimed_person=NULL WHERE surface=? AND handle=?", (surface, handle))
-        if old and old != person_id:
-            self.merge(old, person_id)
+        self.assign(surface, handle, person_id, clip(evidence, 300))
         return {"linked": True, "note": "linked"}
 
     def merge(self, old: str, into: str) -> None:
+        """Fold one person into another: accounts, pending claims and every record."""
         if old == into or old == "owner":
             return
         self.store.run("UPDATE identities SET person=? WHERE person=?", (into, old))
+        self.store.run("UPDATE identities SET claimed_person=? WHERE claimed_person=?", (into, old))
+        self.store.run("UPDATE identities SET claimed_person=NULL WHERE claimed_person=person")
         for table, column in (("notes", "person"), ("journal", "actor"), ("thoughts", "person"), ("tasks", "person")):
             self.store.run(f"UPDATE {table} SET {column}=? WHERE {column}=?", (into, old))
+        # Each row also lists who was present, and the shared-space rule reads that list.
+        for table in ("journal", "notes"):
+            for row in self.store.q(f"SELECT id, people FROM {table} WHERE people LIKE ?", (f'%"{old}"%',)):
+                try:
+                    present = json.loads(row["people"] or "[]")
+                except ValueError:
+                    continue
+                present = sorted({into if person == old else person for person in present})
+                self.store.run(f"UPDATE {table} SET people=? WHERE id=?", (json.dumps(present), row["id"]))
         self.store.run("DELETE FROM people WHERE id=?", (old,))
 
     def settle(self, scene: Scene) -> None:

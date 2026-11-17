@@ -266,6 +266,67 @@ def test_cross_place_hint_only_for_the_same_linked_person(memory: Memory):
     assert memory.elsewhere(game) == []
 
 
+def configure_owner_identity(memory: Memory, surface: str, handle: str) -> None:
+    """What a restart does after the owner adds an account to vigil.toml."""
+    memory.config.raw["owner"]["identities"].append({"surface": surface, "handle": handle})
+    memory.seed_owner()
+
+
+def test_an_account_the_owner_configures_brings_its_history(memory: Memory):
+    olive, eli = Who("minecraft", "Riverwalker", "Riverwalker"), Who("minecraft", "Eli", "Eli")
+    game = scene_for(memory, "minecraft:world", "group", olive, [eli])
+    before = game.actor_person
+    game.heard = "build the bridge at the river"
+    memory.journal_add(game, "Starting on it.", "", "end_turn")
+    watching = scene_for(memory, "minecraft:world", "group", eli, [olive])
+    watching.heard = "nice bridge"
+    memory.journal_add(watching, "Thanks.", "", "end_turn")
+    memory.thought_add(game, "follow_up", "ask how the bridge held", time.time(), scope="person", person=before)
+
+    configure_owner_identity(memory, "minecraft", "Riverwalker")
+
+    assert memory.person(before) is None  # one person now, not a renamed stranger left behind
+    rows = memory.store.q("SELECT actor, people FROM journal ORDER BY id")
+    assert rows[0]["actor"] == "owner"
+    assert all("owner" in json.loads(row["people"]) and before not in row["people"] for row in rows)
+    assert memory.store.one("SELECT person FROM thoughts")["person"] == "owner"
+    again = scene_for(memory, "minecraft:world", "group", olive, [eli])
+    assert again.actor_person == "owner" and again.audience == "group"  # public chat stays public
+    text, _ = compose(again, memory, memory.config, {})
+    assert "Speaking: Olive (your owner)" in text and "Names here: Riverwalker is Olive (your owner)." in text
+    present = scene_for(memory, "minecraft:world", "group", eli, [olive])
+    assert "Riverwalker is Olive (your owner)" in compose(present, memory, memory.config, {})[0]
+    whisper = scene_for(memory, "minecraft:world", "dm", olive)
+    assert whisper.audience == "owner" and "Names here" not in compose(whisper, memory, memory.config, {})[0]
+
+
+def test_configuring_an_account_leaves_someone_elses_other_accounts_alone(memory: Memory):
+    slack = scene_for(memory, "slack:T1:C1", "group", Who("slack:T1", "U2", "Dana"))
+    dana = slack.actor_person
+    slack.heard = "I will review the importer"
+    memory.journal_add(slack, "Thanks.", "", "end_turn")
+    assert memory.link(slack, dana, "minecraft", "Riverwalker", "says it is her game name")["linked"] is True
+    configure_owner_identity(memory, "minecraft", "Riverwalker")
+    assert memory.resolve(Who("minecraft", "Riverwalker", "Riverwalker")) == "owner"
+    # Folding Dana in would have made her Slack account the owner's.
+    assert memory.resolve(Who("slack:T1", "U2", "Dana")) == dana and not memory.person(dana)["is_owner"]
+    assert memory.store.one("SELECT actor FROM journal")["actor"] == dana
+
+
+def test_nobody_else_can_take_an_account_the_owner_holds(memory: Memory):
+    configure_owner_identity(memory, "minecraft", "Riverwalker")
+    slack = scene_for(memory, "slack:T1:C1", "group", Who("slack:T1", "U2", "Dana"))
+    result = memory.link(slack, slack.actor_person, "minecraft", "Riverwalker", "says it is her game name")
+    assert result["linked"] is False and "owner" in result["note"]
+    row = memory.store.one("SELECT person, claimed_person FROM identities WHERE surface='minecraft' AND handle='Riverwalker'")
+    assert row["person"] == "owner" and row["claimed_person"] is None
+    # And the owner's file cannot make an agent's account the owner.
+    maker = Who("minecraft", "Maker", "Maker", True)
+    agent = scene_for(memory, "minecraft:world", "group", maker).actor_person
+    configure_owner_identity(memory, "minecraft", "Maker")
+    assert memory.resolve(maker) == agent != "owner"
+
+
 def test_shared_spaces_travel_with_the_people_in_them(memory: Memory):
     maya, dev, sam, priya, eli = (Who("slack:T1", u, n) for u, n in (("U1", "Maya"), ("U2", "Dev"), ("U3", "Sam"), ("U4", "Priya"), ("U5", "Eli")))
     importer = scene_for(memory, "slack:T1:CIMP", "group", sam, [maya, dev])
