@@ -31,7 +31,20 @@ REPOSITORY = "microsoft/amplifier-constellation-runtime"
 #: checks a built-in tool's arguments against its schema before asking permission.
 #: From 0.15.9 a request for a tool name the session does not list gets an error for
 #: that call, and the model can ask again, instead of the whole turn failing.
+#: From 0.15.11 a session can compact after a reply with reasoning and no text; before
+#: that, such a turn failed and the input waiting behind it was lost. 0.15.10 added an
+#: approval-policy profile that applies only when the client negotiates it.
 RELEASES: dict[str, dict[str, dict[str, str]]] = {
+    "0.15.11": {
+        "linux-aarch64": {
+            "asset_sha256": "b0ad6b987ce3a75e75b2c5aadad49c9f295daf86c769f047e4aa4f4e8776275a",
+            "binary_sha256": "31c1e4c98e3c4483a09d9be089424bd724e268206c29f08c686dc4c99ba611a7",
+        },
+        "linux-x86_64": {
+            "asset_sha256": "aa3cc6f8ff5007369930ccc550bd63e77215b36ffbfdc6df02e816fdec3acb44",
+            "binary_sha256": "a923d03d44662d150cababe9ebdec60c37e1d99de8d1316193640416039b221b",
+        },
+    },
     "0.15.9": {
         "linux-aarch64": {
             "asset_sha256": "ff7c2f4920d44a63bc0bb2a73fff10042a5183bc3631a79575f709c549c7c3bc",
@@ -63,7 +76,7 @@ RELEASES: dict[str, dict[str, dict[str, str]]] = {
         },
     },
 }
-DEFAULT_VERSION = "0.15.9"
+DEFAULT_VERSION = "0.15.11"
 
 #: Mind tools that change Vigil's own memory. The engine is told it may call them
 #: without asking, since nothing outside Vigil is affected.
