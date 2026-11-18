@@ -37,7 +37,22 @@ REPOSITORY = "microsoft/amplifier-constellation-runtime"
 #: From 0.15.12 a long session keeps only the newest presence brief after a native
 #: checkpoint too, and an Anthropic request leaves out reasoning whose instructions,
 #: tools or earlier messages have since changed, which newer accounts refuse.
+#: 0.15.13 added an owner command that reconciles a saved session with a changed list
+#: of provider tools. From 0.15.14 the engine offers `workspace_attach_file`, which
+#: sends a saved Markdown, text, CSV or JSON document (up to 200,000 bytes) to the
+#: conversation as an embedded resource. It is one more built-in tool, so installing
+#: it changes every session's tool list once.
 RELEASES: dict[str, dict[str, dict[str, str]]] = {
+    "0.15.14": {
+        "linux-aarch64": {
+            "asset_sha256": "08f84d1528de2472fafbd95f7bfd335847f958b9a134472ad2afa900a904c1bf",
+            "binary_sha256": "15c4a02c5c646d8c61e6cc50869cf265993ca0843867baab0bd843cee82b4caf",
+        },
+        "linux-x86_64": {
+            "asset_sha256": "9651a931ea6189a09b5f645c0bd19304a6bd4c75e01f390990f0db6c355afda9",
+            "binary_sha256": "8934d7c678a2078dd327f9b49dd5a7051843403869d04c9a4c0808eacc97372e",
+        },
+    },
     "0.15.12": {
         "linux-aarch64": {
             "asset_sha256": "b479ccb72d7fc26a7514999649b98681edcfdc23a2ca3b999a3e1d02ea41ed40",
@@ -89,7 +104,7 @@ RELEASES: dict[str, dict[str, dict[str, str]]] = {
         },
     },
 }
-DEFAULT_VERSION = "0.15.12"
+DEFAULT_VERSION = "0.15.14"
 
 #: Mind tools that change Vigil's own memory. The engine is told it may call them
 #: without asking, since nothing outside Vigil is affected.
