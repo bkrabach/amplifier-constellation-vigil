@@ -24,7 +24,7 @@ import aiohttp
 
 from . import bridges, brief, decisions, prompts, surfaces
 from .conductor import VIGIL_META, RuntimeProc
-from .mcp import ToolError, call_tool
+from .mcp import ToolError, call_tool, list_tools
 from .memory import OWNER_WORK_CHARS, Memory, clip, owner_work_seen
 from .store import now
 from .surfaces import Scene
@@ -201,6 +201,11 @@ TOOLS_MISSING = (
 #: Where an experience gives the agent tools to speak with, by surface. In such a place
 #: what the agent said is what went through those tools, not the text that ends its turn.
 SPEECH_TOOLS = {"minecraft": ("minecraft", frozenset({"chat", "tell"}))}
+#: How a conversation is asked to give the agent another turn later: the name its
+#: connector's tool server starts with, the tool, and whether the tool is newer than
+#: some versions of the connector. A newer one is looked for before it is relied on,
+#: and may be called outside a turn in that conversation.
+WAKE_TOOLS = {"slack": ("slack", "slack_follow_up", False), "minecraft": ("minecraft", "follow_up", True)}
 
 
 class Turn:
@@ -211,6 +216,8 @@ class Turn:
         self.order: list[str] = []
         self.tools: list[str] = []
         self.own_follow_up = False
+        #: How far ahead the agent set its own reminder this turn (0 when it cancelled one).
+        self.own_follow_up_after = 3600.0
         self.cancelled = False
         self.speech_server, self.speech_tools = speech or ("", frozenset())
         self.speech_tried = False
@@ -235,8 +242,13 @@ class Turn:
         name = str(raw.get("tool") or update.get("title") or "")
         if name and name not in self.tools:
             self.tools.append(name)
-        if "slack_follow_up" in name or "slack follow up" in name.lower():
+        if ("slack_follow_up" in name or "slack follow up" in name.lower()
+                or self.speech_server == "minecraft" and raw.get("server") in (None, "minecraft") and re.fullmatch(r"(?:.*[.:]|.*__)?follow_up", name)):
+            # The connector keeps one reminder for the conversation, and the agent set it.
             self.own_follow_up = True
+            asked = raw.get("arguments") if isinstance(raw.get("arguments"), dict) else raw
+            if isinstance(asked.get("after_seconds"), (int, float)) and not isinstance(asked.get("after_seconds"), bool):
+                self.own_follow_up_after = float(max(0, min(3600, asked["after_seconds"])))
         call = str(update.get("toolCallId") or "")
         if call and name in self.speech_tools and raw.get("server") in (None, self.speech_server):
             args = raw.get("arguments") if isinstance(raw.get("arguments"), dict) else raw
@@ -283,6 +295,10 @@ class Mind:
         self.tokens: dict[str, str] = {}
         self.used_tokens: set[str] = set()
         self.quiet_hops: dict[str, int] = {}
+        #: Whether a connector's tool server offers a wake tool, and when it was asked.
+        self.wake_offered: dict[str, tuple[bool, float]] = {}
+        #: A place the owner has just sent work to, to be woken once the tool call returns.
+        self.wake_target: tuple[str, Scene] | None = None
         #: Raw input the runtime announced for recent tool calls, by call id.
         self.tool_inputs: dict[str, Any] = {}
         self.tools_ok: set[str] = set()
@@ -494,11 +510,14 @@ class Mind:
         self._label(scene)
         self.memory.overhear(scene)
         self.scenes[sid] = scene
+        await self._probe_wake(sid, scene)
         turn = self.turns[sid] = Turn(SPEECH_TOOLS.get(scene.surface))
         event = self.store.event_begin("prompt", sid, scene.place, {"surface": scene.surface, "mode": scene.mode, "audience": scene.audience})
         try:
-            if scene.wake:
+            if scene.wake or (scene.surface in WAKE_TOOLS and scene.mode == "continuation"):
+                # The connector's one reminder for this conversation has just been used.
                 self.store.meta_set(f"wake:{scene.place}", "0")
+                self.store.meta_set(f"wake-own:{scene.place}", "0")
             if scene.mode == "continuation" and scene.wake and all(owner_work_seen(thought) for thought in self.memory.thoughts_due(scene)):
                 # Our own wake-up, and nothing is ready: answer it without a model call.
                 await self._arm_wake(sid, scene, None)
@@ -515,7 +534,7 @@ class Mind:
             if recall and scene.heard:
                 extras["recall"] = self.memory.search(scene, scene.heard, 4, asked=False)
             if scene.wake:
-                extras["lines"] = ["This turn exists because something you were holding is due. Deliver it now."]
+                extras["lines"] = ["This turn exists because something you were holding is due. Deliver it now, or set a new follow-up if it should wait: it will not come back by itself."]
             if self._tools_missing(sid, link.runtime):
                 extras.setdefault("lines", []).append(TOOLS_MISSING)
                 if sid not in self.tools_warned:
@@ -533,7 +552,10 @@ class Mind:
 
             stop = (result or {}).get("stopReason") or ""
             said = turn.said(scene.mode)
-            if surfaced and (said or spoken(turn.final())) and stop == "end_turn":
+            # A wake-up turn exists for what was due. If the agent ended it without trying
+            # to speak, it chose not to raise it now; held open, the same thought would
+            # wake the conversation again within seconds, one model call each time.
+            if surfaced and stop == "end_turn" and (said or spoken(turn.final()) or (scene.wake and not turn.speech_tried)):
                 self.memory.thoughts_delivered(surfaced, sid)
             if scene.heard or said:
                 self.memory.journal_add(scene, said, ", ".join(turn.tools[:8]), stop)
@@ -666,21 +688,71 @@ class Mind:
             soonest = 45.0 if soonest is None else min(soonest, 45.0)
         return soonest
 
-    async def _arm_wake(self, sid: str, scene: Scene, turn: Turn | None) -> None:
+    def _wake_tool(self, sid: str, scene: Scene) -> tuple[dict[str, Any], str] | None:
+        """The connector tool that can bring this conversation back later, with the
+        server to call it on, or None when the conversation has no such tool."""
+        spec = WAKE_TOOLS.get(scene.surface)
+        if spec is None or not self.config.mind("followup_chain", True):
+            return None
+        prefix, tool, newer = spec
+        if scene.surface == "minecraft" and (scene.audience != "group" or scene.mode == "voice"):
+            return None  # the game's reminder returns to the public conversation only
+        servers = (getattr(self, "servers", None) or {}).get(sid) or []
+        server = next((s for s in servers if str(s.get("name", "")).startswith(prefix) and s.get("url")), None)
+        if server is None:
+            return None
+        if newer and not (getattr(self, "wake_offered", None) or {}).get(server["url"], (False, 0.0))[0]:
+            return None
+        return server, tool
+
+    async def _probe_wake(self, sid: str, scene: Scene) -> None:
+        """Ask a connector whether it has a wake tool that some of its versions lack.
+        Asked once per server, and again every ten minutes while the answer is no, so
+        an upgraded connector is noticed without a restart here."""
+        spec = WAKE_TOOLS.get(scene.surface)
+        if spec is None or not spec[2]:
+            return
+        server = next((s for s in self.servers.get(sid) or [] if str(s.get("name", "")).startswith(spec[0]) and s.get("url")), None)
+        if server is None:
+            return
+        offered, asked = self.wake_offered.get(server["url"], (False, 0.0))
+        if offered or now() - asked < 600:
+            return
+        try:
+            offered = spec[1] in await list_tools(self.http, server, timeout=3.0)
+        except Exception as error:
+            log.info("could not ask %s for its tools: %s", scene.surface, error)
+        self.wake_offered[server["url"]] = (offered, now())
+
+    async def _arm_wake(self, sid: str, scene: Scene, turn: Turn | None, outside: bool = False) -> bool:
         """Ask the experience to give this conversation another turn when something
-        held for it comes due. Only Slack offers this, through its follow-up tool, and
-        only for up to an hour at a time, so longer waits are a chain of quiet hops."""
-        if scene.surface != "slack" or not self.config.mind("followup_chain", True):
-            return
+        held for it comes due. Slack and the game offer this through a follow-up tool,
+        for up to an hour at a time, so longer waits are a chain of quiet hops.
+        ``outside`` marks a call made from another conversation, when the owner has
+        just sent work to this one. Returns whether a wake-up is now set."""
+        found = self._wake_tool(sid, scene)
+        if found is None:
+            return False
+        server, tool = found
+        key, own = f"wake:{scene.place}", f"wake-own:{scene.place}"
         if turn is not None and turn.own_follow_up:
-            return
-        server = next((s for s in self.servers.get(sid) or [] if str(s.get("name", "")).startswith("slack") and s.get("url")), None)
+            # The connector keeps one reminder per conversation and the agent has just
+            # set it, replacing any of ours. Remember until when: setting ours before
+            # then would replace the agent's, and its goal would be lost.
+            self.store.meta_set(key, "0")
+            self.store.meta_set(own, str(now() + turn.own_follow_up_after) if turn.own_follow_up_after else "0")
+            return False
+        try:
+            if now() < float(self.store.meta_get(own) or 0):
+                return True  # the turn the agent's own reminder starts will end here too
+        except ValueError:
+            pass
         wait = self._next_wake(scene)
-        if server is None or wait is None or wait > float(self.config.mind("followup_chain_horizon_hours", 24)) * 3600:
+        if wait is None or wait > float(self.config.mind("followup_chain_horizon_hours", 24)) * 3600:
             self.quiet_hops.pop(scene.place, None)
-            return
+            return False
         after = int(min(3600, max(5, wait + 2)))
-        if turn is None:
+        if turn is None and not outside:
             # A wake-up that found nothing to deliver. It should only happen on the way
             # to something due later; never let it turn into a tight loop.
             hops = self.quiet_hops.get(scene.place, 0) + 1
@@ -688,25 +760,44 @@ class Mind:
             after = max(after, 30)
             if hops > 40:
                 log.warning("wake chain for %s stopped after %d quiet hops with nothing delivered", scene.place, hops)
-                return
+                return False
         else:
             self.quiet_hops.pop(scene.place, None)
+        if turn is not None and scene.wake:
+            # This turn was itself a wake-up and left something undelivered: a chat line
+            # the connector refused, a turn cut short. Come back, but not at once.
+            after = max(after, 300)
         # One wake-up per place is enough. Every turn ends here, and without this each
         # one schedules its own, so they all fire together when the thought comes due.
         fire_at = now() + after
-        key = f"wake:{scene.place}"
         try:
             armed = float(self.store.meta_get(key) or 0)
         except ValueError:
             armed = 0.0
         if now() < armed <= fire_at + 5:
-            return
+            return True
         goal = f"[vigil:wake:{secrets.token_hex(5)}] Return to this conversation when something you are holding for it is due. Stay quiet if nothing is ready."
         try:
-            await call_tool(self.http, server, "slack_follow_up", {"after_seconds": after, "goal": goal}, timeout=5.0)
+            result = await call_tool(self.http, server, tool, {"after_seconds": after, "goal": goal}, timeout=5.0)
+            if result.get("isError"):
+                # A refusal is an answer (the conversation is stopped, or has effects
+                # to settle): nothing is set, and recording it as set would hide that.
+                raise RuntimeError("refused: " + clip(json.dumps(result.get("content") or result.get("structuredContent") or ""), 160))
             self.store.meta_set(key, str(fire_at))
+            return True
         except Exception as error:
             log.info("wake not armed for %s: %s", scene.place, error)
+            return False
+
+    async def _wake_elsewhere(self) -> str:
+        """After the owner sent work to another place: ask that place for a turn, and
+        say in the tool's answer whether it will give one."""
+        target, self.wake_target = getattr(self, "wake_target", None), None
+        if target is None:
+            return ""
+        if await self._arm_wake(target[0], target[1], None, outside=True):
+            return " That place will give you a turn for it when it is due, without waiting for someone to speak there."
+        return " That place could not be asked for a turn just now, so you will see it on the next message there after it is due."
 
     # ---- tools ---------------------------------------------------------------------
     async def call(self, token: str, name: str, args: dict[str, Any]) -> Any:
@@ -760,7 +851,7 @@ class Mind:
                 raise ToolError(f"You do not know anyone called {who}.")
             return memory.link(scene, person, str(args.get("surface") or ""), str(args.get("handle") or ""), str(args.get("evidence") or ""))["note"]
         if name == "mind_follow_up":
-            return self._follow_up(scene, args)
+            return self._follow_up(scene, args) + await self._wake_elsewhere()
         if name == "mind_agenda":
             return self._agenda(scene, str(args.get("show") or "all"))
         if name == "mind_cancel":
@@ -841,7 +932,7 @@ class Mind:
         if scope not in ("here", "person", "owner"):
             # Unless told otherwise: stay in this conversation when it can bring the
             # thought back by itself or others are listening; otherwise follow the person.
-            scope = "here" if scene.surface == "slack" or not scene.private else "person"
+            scope = "here" if scene.surface == "slack" or self._wake_tool(scene.session, scene) or not scene.private else "person"
         person = None
         if scope == "person":
             who = str(args.get("who") or "")
@@ -852,7 +943,7 @@ class Mind:
         when = brief.local_now(self.config).fromtimestamp(due, brief.local_now(self.config).tzinfo).strftime("%a %H:%M")
         how = "It will come back to you here" if scope == "here" else ("It will come back the next time you talk with them" if scope == "person" else "It will come back in your next private session with your owner")
         note = ""
-        if scope == "here" and scene.surface != "slack":
+        if scope == "here" and scene.surface != "slack" and not self._wake_tool(scene.session, scene):
             note = " This place cannot wake you on its own, so you will see it on the next message here after it is due."
         elif scope == "person" and not args.get("scope"):
             note = " This place cannot wake you on its own, so it follows the person instead."
@@ -884,6 +975,15 @@ class Mind:
         thought_id = self.memory.thought_add(target, "followup", about, due, "here", None, every, {"sent_by_owner": True})
         when = brief.local_now(self.config).fromtimestamp(due, brief.local_now(self.config).tzinfo).strftime("%a %H:%M")
         note = "" if target.surface == "slack" else " That place cannot wake you on its own, so you will see it on the next message there after it is due."
+        spec = WAKE_TOOLS.get(target.surface)
+        if spec and spec[2]:
+            # A place whose tool can be called from outside it is asked for a turn now,
+            # through the session the agent last had there. `call` does the asking once
+            # this answer is written, and adds whether it worked.
+            last = self.store.one("SELECT session FROM journal WHERE place=? AND COALESCE(session,'')!='' ORDER BY ts DESC LIMIT 1", (target.place,))
+            there = Scene(session=last["session"] if last else "", surface=target.surface, place=target.place, place_label=target.place_label, audience="group")
+            if last and self._wake_tool(there.session, there):
+                self.wake_target, note = (there.session, there), ""
         stays = "" if every else " It stays in your brief there until you close it with mind_cancel."
         return f"Held as follow-up #{thought_id}, due {when}. It will come back to you in {target.place_label}, the next time you are active there.{stays}{note}"
 

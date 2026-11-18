@@ -66,10 +66,15 @@ async def handler(method: str, params, is_notification: bool):
         sessions[sid]["prompts"].append(blocks)
         _save()
         text = " ".join(b.get("text", "") for b in blocks[:-1]) if len(blocks) > 1 else blocks[0].get("text", "")
+        if "stay-silent" in text:
+            return {"stopReason": "end_turn"}  # a turn that ends with nothing said and no tool used
         for index in range(5):
             await _update(sid, {"sessionUpdate": "agent_message_chunk", "messageId": "m1", "content": {"type": "text", "text": f"part{index} "}})
         if "slow-turn" in text:
             await asyncio.sleep(1.2)
+        if "set-own-reminder" in text:
+            await _update(sid, {"sessionUpdate": "tool_call", "toolCallId": "t9", "title": "follow_up", "kind": "other", "status": "pending",
+                                "rawInput": {"server": "minecraft", "tool": "follow_up", "arguments": {"after_seconds": 900, "goal": "check on the door"}}})
         if "ask-mind" in text:
             answer = await conn.send_request("session/request_permission", {
                 "sessionId": sid, "toolCall": {"toolCallId": "t1", "rawInput": {"server": "mind", "tool": "mind_note", "arguments": {}}},

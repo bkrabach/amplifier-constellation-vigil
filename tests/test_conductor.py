@@ -6,6 +6,7 @@ import asyncio
 import json
 import socket
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -352,3 +353,182 @@ url = "http://127.0.0.1:{free_port()}"
 secret = "mc-caller"
 wait_seconds = 5
 ''')
+
+
+# ---- coming back to a game conversation ------------------------------------------------
+
+class GameTools:
+    """The game connector's tool server as far as Vigil uses it: it lists its tools and
+    keeps one reminder. `offer=False` is a connector from before `follow_up` existed."""
+
+    def __init__(self, offer: bool = True) -> None:
+        self.offer, self.refuse, self.calls, self.listed = offer, False, [], 0
+        self.port = free_port()
+        self.server = {"type": "http", "name": "minecraft", "url": f"http://127.0.0.1:{self.port}/mcp",
+                       "headers": [{"name": "Authorization", "value": "Bearer game-token"}]}
+
+    async def handle(self, request):
+        from aiohttp import web
+
+        body = await request.json()
+        assert request.headers.get("Authorization") == "Bearer game-token"
+        method = body.get("method")
+
+        def result(value):
+            return web.json_response({"jsonrpc": "2.0", "id": body.get("id"), "result": value})
+
+        if method == "initialize":
+            return result({"protocolVersion": body["params"]["protocolVersion"], "capabilities": {"tools": {}}, "serverInfo": {"name": "minecraft", "version": "0"}})
+        if method == "notifications/initialized":
+            return web.Response(status=202)
+        if method == "tools/list":
+            self.listed += 1
+            return result({"tools": [{"name": name, "inputSchema": {"type": "object"}} for name in ["chat", "tell"] + (["follow_up"] if self.offer else [])]})
+        self.calls.append(body["params"])
+        if self.refuse:
+            return result({"content": [{"type": "text", "text": "Follow-up unavailable: explicit_stop"}], "isError": True})
+        return result({"content": [{"type": "text", "text": json.dumps({"id": "r1", "status": "scheduled"})}]})
+
+    async def start(self):
+        from aiohttp import web
+
+        app = web.Application()
+        app.add_routes([web.post("/mcp", self.handle)])
+        self.runner = web.AppRunner(app)
+        await self.runner.setup()
+        await web.TCPSite(self.runner, "127.0.0.1", self.port).start()
+
+    async def stop(self):
+        await self.runner.cleanup()
+
+
+def game(messages: list[dict], world: dict | None = None) -> list[dict]:
+    data = {"messages": messages, "world": {"username": "Tester", "players": ["Tester", "Wren"], **(world or {})}}
+    return [{"type": "text", "text": "Current adapter permission policy for this turn:\n{}"}, {"type": "text", "text": "play.\n" + json.dumps(data)}]
+
+
+def chat(number: int, text: str) -> list[dict]:
+    return game([{"id": f"c{number}", "username": "Wren", "message": text, "source": "human"}])
+
+
+def reminder(goal: str, world: dict | None = None) -> list[dict]:
+    """The turn the connector starts when the agent's reminder comes due."""
+    return game([{"id": "f1", "source": "follow_up", "message": goal, "reply_scope": "follow_up:f1"}], {"follow_up": True, "conversation_only": True, **(world or {})})
+
+
+def test_the_game_gives_the_agent_a_turn_for_what_it_holds_there(run):
+    """A live agent held work for a game world and had no turn there for a day: the game
+    starts a turn only for chat, and Vigil could ask only Slack to bring it back."""
+    async def scenario(config, daemon):
+        tools = GameTools()
+        await tools.start()
+        client = Client()
+        await client.attach(config)
+        state = config.home / "fake-state.json"
+        sid = (await client.conn.send_request("session/new", {"cwd": config.workspace, "mcpServers": [tools.server]}))["sessionId"]
+
+        async def prompt(blocks):
+            return await client.conn.send_request("session/prompt", {"sessionId": sid, "prompt": blocks})
+
+        def model_turns():
+            return len(json.loads(state.read_text())[sid]["prompts"])
+
+        await prompt(chat(1, "hello there"))
+        assert tools.calls == [] and tools.listed == 1  # nothing is held, so nothing is set
+        scene = daemon.mind.scenes[sid]
+        # Something held for this place, due in ten minutes: the end of the next turn sets the game's reminder.
+        daemon.memory.thought_add(scene, "followup", "Ask Wren whether the door is wired.", time.time() + 600)
+        await prompt(chat(2, "anyone seen the iron?"))
+        assert [call["name"] for call in tools.calls] == ["follow_up"]
+        first = tools.calls[0]["arguments"]
+        assert 595 <= first["after_seconds"] <= 605 and "[vigil:wake:" in first["goal"]
+        await prompt(chat(3, "found some"))
+        assert len(tools.calls) == 1 and tools.listed == 1  # one reminder is enough, and the connector is asked for its tools once
+
+        # It comes due with nothing ready yet: answered without the model, and set again.
+        turns = model_turns()
+        assert await prompt(reminder(first["goal"])) == {"stopReason": "end_turn", "_meta": {"dev.vigil": {"wake": "quiet"}}}
+        assert model_turns() == turns and len(tools.calls) == 2
+
+        # Now it is due. The model gets the turn with the thought in its brief, and ends it without a word.
+        daemon.store.run("UPDATE thoughts SET due=0")
+        await prompt(reminder(tools.calls[1]["arguments"]["goal"], {"note": "stay-silent"}))
+        brief = json.loads(state.read_text())[sid]["prompts"][-1][-1]["text"]
+        assert "Ask Wren whether the door is wired." in brief and "Deliver it now" in brief and "chat or tell" in brief
+        assert client.updates[-1]["content"]["text"] == "done"  # the silent turn sent nothing
+        # It chose not to raise it. Held open, the thought would wake the conversation again in seconds.
+        assert daemon.store.one("SELECT state FROM thoughts")["state"] == "delivered"
+        assert len(tools.calls) == 2
+
+        # A refusal from the connector is not a reminder: it is asked again at the next turn's end.
+        tools.refuse = True
+        daemon.memory.thought_add(scene, "followup", "Ask about the roof.", time.time() + 600)
+        await prompt(chat(4, "roof next?"))
+        assert len(tools.calls) == 3 and float(daemon.store.meta_get(f"wake:{scene.place}") or 0) == 0
+        tools.refuse = False
+        await prompt(chat(5, "ok"))
+        assert len(tools.calls) == 4 and float(daemon.store.meta_get(f"wake:{scene.place}")) > 0
+
+        # The agent sets a reminder of its own with the game's tool. The connector keeps one,
+        # so setting ours would replace it and lose its goal: none is set until it has come due.
+        daemon.memory.thought_add(scene, "followup", "Ask about the windows.", time.time() + 120)
+        await prompt(game([{"id": "c6", "username": "Wren", "message": "remind yourself", "source": "human"}], {"note": "set-own-reminder"}))
+        await prompt(chat(7, "and again"))
+        assert len(tools.calls) == 4
+        await prompt(reminder("check on the door"))  # its own reminder: an ordinary turn, after which ours is set
+        assert len(tools.calls) == 5 and 100 <= tools.calls[4]["arguments"]["after_seconds"] <= 125
+
+        # A private turn sets none: the game's reminder belongs to the public conversation.
+        daemon.store.meta_set(f"wake:{scene.place}", "0")
+        await prompt(game([{"id": "w1", "username": "Wren", "message": "psst", "source": "human", "whisper": True}]))
+        assert len(tools.calls) == 5
+        await client.close()
+        await tools.stop()
+    run(scenario)
+
+
+def test_work_the_owner_sends_to_the_game_gets_a_turn_there(run):
+    async def scenario(config, daemon):
+        tools, old = GameTools(), GameTools(offer=False)
+        await tools.start()
+        await old.start()
+        client = Client()  # one client: the scripted runtime numbers sessions per process
+        await client.attach(config)
+        state = config.home / "fake-state.json"
+
+        async def session(servers, blocks):
+            sid = (await client.conn.send_request("session/new", {"cwd": config.workspace, "mcpServers": servers}))["sessionId"]
+            await client.conn.send_request("session/prompt", {"sessionId": sid, "prompt": blocks})
+            return sid
+
+        game_sid = await session([tools.server], chat(1, "hello there"))
+        owner_sid = await session([], [{"type": "text", "text": slack("D9", "UOWNER", "a job for you")}])
+        token = next(token for token, sid in daemon.mind.tokens.items() if sid == owner_sid)
+
+        said = await daemon.mind.call(token, "mind_follow_up", {"about": "Direct the door work and tell me how it went.", "where": "minecraft world"})
+        assert "will give you a turn for it when it is due, without waiting for someone to speak there" in said and "cannot wake" not in said
+        assert [call["name"] for call in tools.calls] == ["follow_up"] and tools.calls[0]["arguments"]["after_seconds"] == 5
+
+        # The game starts that turn. The work is in its brief, and seeing it once does not set another reminder.
+        await client.conn.send_request("session/prompt", {"sessionId": game_sid, "prompt": reminder(tools.calls[0]["arguments"]["goal"], {"note": "stay-silent"})})
+        brief = json.loads(state.read_text())[game_sid]["prompts"][-1][-1]["text"]
+        assert "Direct the door work and tell me how it went." in brief and "Your owner asked this of you in private" in brief
+        work = daemon.store.one("SELECT state, delivered FROM thoughts")
+        assert work["state"] == "pending" and work["delivered"]  # seen, and open until the agent closes it
+        assert len(tools.calls) == 1
+
+        # Sent again while the connector refuses (the conversation is stopped): the answer says so.
+        tools.refuse = True
+        said = await daemon.mind.call(token, "mind_follow_up", {"about": "Check the roof too.", "where": "minecraft world"})
+        assert "could not be asked for a turn just now" in said and len(tools.calls) == 2
+
+        # A connector from before the tool existed is asked for its tools, not for a reminder.
+        other_sid = await session([old.server], chat(7, "hi"))
+        scene = daemon.mind.scenes[other_sid]
+        daemon.memory.thought_add(scene, "followup", "Ask about the iron.", time.time() + 600)
+        await client.conn.send_request("session/prompt", {"sessionId": other_sid, "prompt": chat(8, "hello again")})
+        assert old.listed == 1 and old.calls == []
+        await client.close()
+        await tools.stop()
+        await old.stop()
+    run(scenario)
