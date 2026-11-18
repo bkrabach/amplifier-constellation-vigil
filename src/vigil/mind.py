@@ -216,6 +216,21 @@ WAKE_SERVERS = "wake-servers.json"
 #: admits a reminder when its own pacing allows; asking again sooner would replace one
 #: that is still waiting and push it back.
 WAKE_GRACE = 900.0
+#: Where an operator's holds are kept: a JSON list of surface names or place-key
+#: prefixes. It is read on every decision, so `vigil wake --hold` and `--release` take
+#: effect on a running daemon without a restart.
+WAKE_HOLD = "wake-hold"
+
+
+def wake_held(store: Any, scene: Scene) -> bool:
+    """Whether an operator is holding wake-ups for this place: while something else is
+    being repaired there, say. Nothing is asked of the connector for it by any path.
+    What the agent holds for the place stays held, and stays in its brief."""
+    try:
+        entries = json.loads(store.meta_get(WAKE_HOLD) or "[]")
+    except ValueError:
+        return False
+    return any(isinstance(entry, str) and entry and (entry == scene.surface or (scene.place or "").startswith(entry)) for entry in entries)
 
 
 class Turn:
@@ -744,11 +759,14 @@ class Mind:
         if self._saved_wakes().pop(place, None) is not None:
             self._save_wakes()
 
-    def _wake_tool(self, sid: str, scene: Scene) -> tuple[dict[str, Any], str] | None:
+    def _wake_tool(self, sid: str, scene: Scene, held: bool = False) -> tuple[dict[str, Any], str] | None:
         """The connector tool that can bring this conversation back later, with the
-        server to call it on, or None when the conversation has no such tool."""
+        server to call it on, or None when the conversation has no such tool or an
+        operator is holding wake-ups for it. ``held`` asks regardless of a hold."""
         spec = WAKE_TOOLS.get(scene.surface)
         if spec is None or not self.config.mind("followup_chain", True):
+            return None
+        if not held and wake_held(self.store, scene):
             return None
         prefix, tool, newer = spec
         if scene.surface == "minecraft" and (scene.audience != "group" or scene.mode == "voice"):
@@ -781,7 +799,8 @@ class Mind:
             except Exception as error:
                 log.info("could not ask %s for its tools: %s", scene.surface, error)
             self.wake_offered[server["url"]] = (offered, now())
-        if offered and self._wake_tool(sid, scene):
+        if offered and self._wake_tool(sid, scene, held=True):
+            # Kept during a hold too, so that releasing it needs no further turn there.
             self._remember_wake(sid, scene, server)
 
     async def _arm_wake(self, sid: str, scene: Scene, turn: Turn | None, outside: bool = False, tending: bool = False) -> bool:
@@ -804,7 +823,8 @@ class Mind:
             self.store.meta_set(own, str(now() + turn.own_follow_up_after) if turn.own_follow_up_after else "0")
             return False
         try:
-            if now() < float(self.store.meta_get(own) or 0):
+            # A connector's reminder is at most an hour ahead; a later time here is not one.
+            if now() < float(self.store.meta_get(own) or 0) <= now() + 3600:
                 return True  # the turn the agent's own reminder starts will end here too
         except ValueError:
             pass

@@ -1069,3 +1069,18 @@ def test_a_thought_held_from_a_whisper_is_not_raised_in_public_chat(memory: Memo
     memory.thought_add(public, "followup", "Ask the crew about the roof.", 0, "here")
     assert [t["text"] for t in memory.thoughts_due(public)] == ["Ask the crew about the roof."]
     assert len(memory.thoughts_due(whisper)) == 2 and Bare(memory)._next_wake(public) == 0.0
+
+
+def test_a_hold_names_a_surface_or_the_start_of_a_place(memory: Memory):
+    from vigil.mind import WAKE_HOLD, wake_held
+
+    game = Scene(session="s", surface="minecraft", place="minecraft:workshop|world-1", audience="group")
+    channel = Scene(session="s", surface="slack", place="slack:T1|C1", audience="group")
+    assert not wake_held(memory.store, game)
+    memory.store.meta_set(WAKE_HOLD, json.dumps(["minecraft"]))
+    assert wake_held(memory.store, game) and not wake_held(memory.store, channel)
+    memory.store.meta_set(WAKE_HOLD, json.dumps(["slack:T1|C1", "minecraft:other"]))
+    assert wake_held(memory.store, channel) and not wake_held(memory.store, game)
+    for unreadable in ("not json", json.dumps([None, "", 7])):
+        memory.store.meta_set(WAKE_HOLD, unreadable)
+        assert not wake_held(memory.store, game)  # a damaged list holds nothing rather than everything
