@@ -479,6 +479,10 @@ def test_the_game_gives_the_agent_a_turn_for_what_it_holds_there(run):
         await prompt(chat(3, "found some"))
         assert len(tools.calls) == 1 and tools.listed == 1  # one reminder is enough, and the connector is asked for its tools once
 
+        # The game continues the agent's own activity: that is not the reminder, which stays as it is.
+        await prompt(game([{"id": "k1", "source": "continuation", "message": "Continue your current activity."}]))
+        assert len(tools.calls) == 1 and float(daemon.store.meta_get(f"wake:{scene.place}")) > time.time()
+
         # It comes due with nothing ready yet: answered without the model, and set again.
         turns = model_turns()
         assert await prompt(reminder(first["goal"])) == {"stopReason": "end_turn", "_meta": {"dev.vigil": {"wake": "quiet"}}}

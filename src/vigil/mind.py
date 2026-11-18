@@ -543,8 +543,11 @@ class Mind:
         turn = self.turns[sid] = Turn(SPEECH_TOOLS.get(scene.surface))
         event = self.store.event_begin("prompt", sid, scene.place, {"surface": scene.surface, "mode": scene.mode, "audience": scene.audience})
         try:
-            if scene.wake or (scene.surface in WAKE_TOOLS and scene.mode == "continuation"):
-                # The connector's one reminder for this conversation has just been used.
+            if scene.wake or scene.reminder:
+                # The connector's one reminder for this conversation has just been used. A
+                # game's ordinary continuation turn is not that: on a live agent, taking it
+                # for one set the reminder again after every such turn, and dropped the note
+                # of a reminder that was still pending.
                 self.store.meta_set(f"wake:{scene.place}", "0")
                 self.store.meta_set(f"wake-own:{scene.place}", "0")
             if scene.mode == "continuation" and scene.wake and all(owner_work_seen(thought) for thought in self.memory.thoughts_due(scene)):
