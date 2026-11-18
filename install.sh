@@ -98,7 +98,7 @@ ExecStart="$VIGIL" --home "$VIGIL_HOME" serve
 Restart=always
 RestartSec=3
 TimeoutStopSec=75
-KillMode=control-group
+KillMode=mixed
 UMask=0077
 
 [Install]

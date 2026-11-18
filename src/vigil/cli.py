@@ -163,7 +163,19 @@ def _control(args: argparse.Namespace, path: str, method: str = "GET") -> dict:
 
 
 def cmd_status(args: argparse.Namespace) -> None:
+    import time
+
     status = _control(args, "/control/status")
+    if args.wait_idle is not None:
+        # For a script that is about to restart the daemon: `vigil status --wait-idle 120 &&
+        # systemctl --user restart ...` goes ahead only when no turn is running.
+        deadline = time.monotonic() + max(0.0, args.wait_idle)
+        while status.get("running_turns") and time.monotonic() < deadline:
+            time.sleep(1.0)
+            status = _control(args, "/control/status")
+        if status.get("running_turns"):
+            print(f"{status['running_turns']} turn(s) still running after {args.wait_idle:.0f}s; not idle", file=sys.stderr)
+            raise SystemExit(3)
     if args.json:
         print(json.dumps(status, indent=2))
         return
@@ -322,6 +334,7 @@ def main() -> None:
 
     p = sub.add_parser("status", help="what the daemon is doing")
     p.add_argument("--json", action="store_true")
+    p.add_argument("--wait-idle", type=float, metavar="SECONDS", help="wait up to this long for no turn to be running; exit 3 if one still is")
     p.set_defaults(func=cmd_status)
 
     p = sub.add_parser("dream", help="run the consolidation pass now")
