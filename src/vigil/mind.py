@@ -16,6 +16,7 @@ import dataclasses
 import datetime
 import json
 import logging
+import os
 import re
 import secrets
 from typing import Any
@@ -25,7 +26,7 @@ import aiohttp
 from . import bridges, brief, decisions, prompts, surfaces
 from .conductor import VIGIL_META, RuntimeProc
 from .mcp import ToolError, call_tool, list_tools
-from .memory import OWNER_WORK_CHARS, Memory, clip, owner_work_seen
+from .memory import OWNER_WORK_CHARS, Memory, audience_fits, clip, owner_work_seen
 from .store import now
 from .surfaces import Scene
 
@@ -206,6 +207,15 @@ SPEECH_TOOLS = {"minecraft": ("minecraft", frozenset({"chat", "tell"}))}
 #: some versions of the connector. A newer one is looked for before it is relied on,
 #: and may be called outside a turn in that conversation.
 WAKE_TOOLS = {"slack": ("slack", "slack_follow_up", False), "minecraft": ("minecraft", "follow_up", True)}
+#: Where the tool servers of places that can be asked from outside a turn are kept, so
+#: a restart does not leave held work waiting for someone to speak there. A descriptor
+#: carries the connector's own credential: it lives beside the home's other secrets,
+#: private to the owner, and never in the state database or a log.
+WAKE_SERVERS = "wake-servers.json"
+#: How long past its time a wake-up is given before it is taken for lost. The connector
+#: admits a reminder when its own pacing allows; asking again sooner would replace one
+#: that is still waiting and push it back.
+WAKE_GRACE = 900.0
 
 
 class Turn:
@@ -299,6 +309,10 @@ class Mind:
         self.wake_offered: dict[str, tuple[bool, float]] = {}
         #: A place the owner has just sent work to, to be woken once the tool call returns.
         self.wake_target: tuple[str, Scene] | None = None
+        #: Wake-up turns in a row, per place, that left what they surfaced undelivered.
+        self.wake_misses: dict[str, int] = {}
+        #: The saved tool servers, read from the secrets folder on first use.
+        self.wake_places: dict[str, dict[str, Any]] | None = None
         #: Raw input the runtime announced for recent tool calls, by call id.
         self.tool_inputs: dict[str, Any] = {}
         self.tools_ok: set[str] = set()
@@ -533,6 +547,7 @@ class Mind:
             effort, recall = await self._triage(scene)
             if recall and scene.heard:
                 extras["recall"] = self.memory.search(scene, scene.heard, 4, asked=False)
+            extras["can_return"] = self._wake_tool(sid, scene) is not None
             if scene.wake:
                 extras["lines"] = ["This turn exists because something you were holding is due. Deliver it now, or set a new follow-up if it should wait: it will not come back by itself."]
             if self._tools_missing(sid, link.runtime):
@@ -555,8 +570,15 @@ class Mind:
             # A wake-up turn exists for what was due. If the agent ended it without trying
             # to speak, it chose not to raise it now; held open, the same thought would
             # wake the conversation again within seconds, one model call each time.
-            if surfaced and stop == "end_turn" and (said or spoken(turn.final()) or (scene.wake and not turn.speech_tried)):
+            # What counts is what reached people (`said`), not text that ends a turn where
+            # nobody is shown it: a chat line the game refused, followed by a private
+            # closing note, has delivered nothing.
+            settled = bool(surfaced) and stop == "end_turn" and bool(said or (scene.wake and not turn.speech_tried))
+            if settled:
                 self.memory.thoughts_delivered(surfaced, sid)
+            if scene.wake:
+                # A wake-up that keeps failing to deliver comes back more and more slowly.
+                self.wake_misses[scene.place] = 0 if settled or not surfaced else self.wake_misses.get(scene.place, 0) + 1
             if scene.heard or said:
                 self.memory.journal_add(scene, said, ", ".join(turn.tools[:8]), stop)
             row = self.store.session(sid)
@@ -679,14 +701,48 @@ class Mind:
         that person speaks, and a wake-up with nobody speaking cannot deliver it."""
         soonest: float | None = None
         for thought in self.memory.thoughts_pending(scene.place):
-            if thought["scope"] != "here" or owner_work_seen(thought):
-                continue
+            if thought["scope"] != "here" or owner_work_seen(thought) or not audience_fits(thought["audience"], scene.audience):
+                continue  # a wake-up here could not deliver it, or must not: it was held before fewer people
             wait = max(0.0, thought["due"] - now())
             soonest = wait if soonest is None else min(soonest, wait)
         running = self.store.one("SELECT count(*) AS n FROM tasks WHERE place=? AND state IN ('queued','running')", (scene.place,))
         if running and running["n"]:
             soonest = 45.0 if soonest is None else min(soonest, 45.0)
         return soonest
+
+    def _saved_wakes(self) -> dict[str, dict[str, Any]]:
+        places = getattr(self, "wake_places", None)
+        if places is None:
+            try:
+                path = self.config.secrets_dir / WAKE_SERVERS
+                info = path.lstat()
+                # Like every secret here: a file that others can read is not used.
+                places = json.loads(path.read_text()) if not info.st_mode & 0o077 else {}
+            except (OSError, ValueError):
+                places = {}
+            self.wake_places = places = places if isinstance(places, dict) else {}
+        return places
+
+    def _save_wakes(self) -> None:
+        folder = self.config.secrets_dir
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        scratch = folder / (WAKE_SERVERS + ".new")
+        handle = os.open(scratch, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(handle, "w") as out:
+            json.dump(self._saved_wakes(), out)
+        os.replace(scratch, folder / WAKE_SERVERS)
+
+    def _remember_wake(self, sid: str, scene: Scene, server: dict[str, Any]) -> None:
+        """Keep a place's tool server for after a restart, when its tool may be called
+        from outside a turn. Only the public conversation of the place is kept."""
+        entry = {"session": sid, "surface": scene.surface, "label": scene.place_label, "server": server}
+        if scene.place and self._saved_wakes().get(scene.place) != entry:
+            self._saved_wakes()[scene.place] = entry
+            self._save_wakes()
+
+    def _forget_wake(self, place: str) -> None:
+        if self._saved_wakes().pop(place, None) is not None:
+            self._save_wakes()
 
     def _wake_tool(self, sid: str, scene: Scene) -> tuple[dict[str, Any], str] | None:
         """The connector tool that can bring this conversation back later, with the
@@ -699,11 +755,14 @@ class Mind:
             return None  # the game's reminder returns to the public conversation only
         servers = (getattr(self, "servers", None) or {}).get(sid) or []
         server = next((s for s in servers if str(s.get("name", "")).startswith(prefix) and s.get("url")), None)
-        if server is None:
-            return None
-        if newer and not (getattr(self, "wake_offered", None) or {}).get(server["url"], (False, 0.0))[0]:
-            return None
-        return server, tool
+        if server is not None and newer and not (getattr(self, "wake_offered", None) or {}).get(server["url"], (False, 0.0))[0]:
+            return None  # this session's connector does not have it
+        if server is None and newer:
+            # No session of this place is attached, as after a restart: the server the
+            # tool was last found on.
+            saved = self._saved_wakes().get(scene.place)
+            server = saved["server"] if saved and saved.get("surface") == scene.surface else None
+        return (server, tool) if server is not None else None
 
     async def _probe_wake(self, sid: str, scene: Scene) -> None:
         """Ask a connector whether it has a wake tool that some of its versions lack.
@@ -716,20 +775,22 @@ class Mind:
         if server is None:
             return
         offered, asked = self.wake_offered.get(server["url"], (False, 0.0))
-        if offered or now() - asked < 600:
-            return
-        try:
-            offered = spec[1] in await list_tools(self.http, server, timeout=3.0)
-        except Exception as error:
-            log.info("could not ask %s for its tools: %s", scene.surface, error)
-        self.wake_offered[server["url"]] = (offered, now())
+        if not offered and now() - asked >= 600:
+            try:
+                offered = spec[1] in await list_tools(self.http, server, timeout=3.0)
+            except Exception as error:
+                log.info("could not ask %s for its tools: %s", scene.surface, error)
+            self.wake_offered[server["url"]] = (offered, now())
+        if offered and self._wake_tool(sid, scene):
+            self._remember_wake(sid, scene, server)
 
-    async def _arm_wake(self, sid: str, scene: Scene, turn: Turn | None, outside: bool = False) -> bool:
+    async def _arm_wake(self, sid: str, scene: Scene, turn: Turn | None, outside: bool = False, tending: bool = False) -> bool:
         """Ask the experience to give this conversation another turn when something
         held for it comes due. Slack and the game offer this through a follow-up tool,
         for up to an hour at a time, so longer waits are a chain of quiet hops.
-        ``outside`` marks a call made from another conversation, when the owner has
-        just sent work to this one. Returns whether a wake-up is now set."""
+        ``outside`` marks a call made from outside a turn in this conversation: the
+        owner has just sent work to it, or (``tending``) the daemon is looking between
+        turns for a wake-up that is owed and not set. Returns whether one is now set."""
         found = self._wake_tool(sid, scene)
         if found is None:
             return False
@@ -765,8 +826,9 @@ class Mind:
             self.quiet_hops.pop(scene.place, None)
         if turn is not None and scene.wake:
             # This turn was itself a wake-up and left something undelivered: a chat line
-            # the connector refused, a turn cut short. Come back, but not at once.
-            after = max(after, 300)
+            # the connector refused, a turn cut short. Come back, but not at once, and
+            # more slowly each time it happens again.
+            after = max(after, min(3600, 300 * 2 ** max(0, self.wake_misses.get(scene.place, 1) - 1)))
         # One wake-up per place is enough. Every turn ends here, and without this each
         # one schedules its own, so they all fire together when the thought comes due.
         fire_at = now() + after
@@ -776,6 +838,8 @@ class Mind:
             armed = 0.0
         if now() < armed <= fire_at + 5:
             return True
+        if tending and armed and now() < armed + WAKE_GRACE:
+            return True  # one is set, or is waiting for the connector to admit it
         goal = f"[vigil:wake:{secrets.token_hex(5)}] Return to this conversation when something you are holding for it is due. Stay quiet if nothing is ready."
         try:
             result = await call_tool(self.http, server, tool, {"after_seconds": after, "goal": goal}, timeout=5.0)
@@ -787,7 +851,24 @@ class Mind:
             return True
         except Exception as error:
             log.info("wake not armed for %s: %s", scene.place, error)
+            if "HTTP 401" in str(error) or "HTTP 403" in str(error):
+                self._forget_wake(scene.place)  # the connector's credential changed; the next turn there brings the new one
+            elif tending:
+                # A refusal or an unreachable connector: look again after a while, not on every pass.
+                self.store.meta_set(key, str(now() - WAKE_GRACE + 300))
             return False
+
+    async def tend_wakes(self) -> None:
+        """Between turns: ask a place for a turn when something is owed there and no
+        wake-up is set. It covers what the end of a turn cannot: a restart, a reminder
+        the connector dropped (a Stop cancels it), work that finished in the background.
+        Only places whose tool can be called from outside a turn are tended."""
+        for place, saved in list(self._saved_wakes().items()):
+            sid = str(saved.get("session") or "")
+            if sid in self.turns:
+                continue  # a turn is running there, and its end sets what is needed
+            scene = Scene(session=sid, surface=str(saved.get("surface") or ""), place=place, place_label=str(saved.get("label") or ""), audience="group")
+            await self._arm_wake(sid, scene, None, outside=True, tending=True)
 
     async def _wake_elsewhere(self) -> str:
         """After the owner sent work to another place: ask that place for a turn, and

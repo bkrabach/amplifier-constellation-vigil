@@ -197,7 +197,8 @@ def compose(scene: Scene, memory: Memory, config: Config, extras: dict[str, Any]
     due = [thought for thought in pending if not owner_work(thought)]
     if work:
         add("Your owner asked this of you in private, and you set it for this place. It is work to carry forward when the moment allows, not something to raise on every turn. "
-            "It stays in this brief until you close it with mind_cancel (kind follow_up, its id), once it is done or your owner withdraws it:")
+            "It stays in this brief until you close it with mind_cancel (kind follow_up, its id), once it is done or your owner withdraws it"
+            + (". You can come back to it here without waiting for someone to speak: set a follow-up for this place:" if extras.get("can_return") else ":"))
         for thought in work:
             add(f"- (#{thought['id']}, set {ago(thought['ts'])}) {clip(thought['text'], OWNER_WORK_CHARS)}")
     if due:

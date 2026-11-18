@@ -1046,3 +1046,26 @@ def test_the_agents_own_game_reminder_is_recognised_and_its_notebook_tool_is_not
     assert reminder(game, server="minecraft", tool="follow_up", arguments={"after_seconds": 300, "goal": "check the door"}).own_follow_up_after == 300
     assert reminder(game, server="minecraft", tool="follow_up", arguments={"after_seconds": 0}).own_follow_up_after == 0
     assert reminder(game, title="minecraft.follow_up").own_follow_up_after == 3600  # unknown: assume the longest
+
+
+def test_a_thought_held_from_a_whisper_is_not_raised_in_public_chat(memory: Memory):
+    """A game world is one place for its public chat and its whispers. A wake-up for a
+    thought held from a whisper would have started a public turn told to deliver it."""
+    from vigil.mind import Mind
+
+    class Bare(Mind):
+        def __init__(self, memory):
+            self.memory, self.store, self.config = memory, memory.store, memory.config
+
+    wren = Who("minecraft", "Wren", "Wren")
+    public = scene_for(memory, "minecraft:world", "group", wren, [Who("minecraft", "Maker", "Maker", True)])
+    whisper = scene_for(memory, "minecraft:world", "dm", wren)
+    assert public.place == whisper.place
+    memory.thought_add(whisper, "followup", "Ask Wren privately about the surprise.", 0, "here")
+    assert memory.thoughts_due(public) == [] and "surprise" not in compose(public, memory, memory.config)[0]
+    assert [t["text"] for t in memory.thoughts_due(whisper)] == ["Ask Wren privately about the surprise."]
+    assert Bare(memory)._next_wake(public) is None  # so nothing wakes the public conversation for it
+    # What was held in public may be raised in public, or in a whisper there.
+    memory.thought_add(public, "followup", "Ask the crew about the roof.", 0, "here")
+    assert [t["text"] for t in memory.thoughts_due(public)] == ["Ask the crew about the roof."]
+    assert len(memory.thoughts_due(whisper)) == 2 and Bare(memory)._next_wake(public) == 0.0

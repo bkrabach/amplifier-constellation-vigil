@@ -79,6 +79,16 @@ def clip(text: str, limit: int) -> str:
 OWNER_WORK_CHARS = 900  # the most a place's brief shows of something the owner sent there
 
 
+_WIDTH = {"owner": 0, "dm": 1, "group": 2}
+
+
+def audience_fits(origin: str | None, audience: str) -> bool:
+    """Whether something held before one audience may be raised before another: never
+    before a wider one. A game world is one place for its public chat and its whispers,
+    so the place alone does not say who is listening."""
+    return _WIDTH.get(audience, 2) <= _WIDTH.get(origin or "group", 2)
+
+
 def owner_work(thought: Any) -> bool:
     """Something the owner sent the agent to do in a place: a one-time follow-up set
     with 'where'. It is work, not a reminder, so one showing does not finish it: it
@@ -592,7 +602,7 @@ class Memory:
             if practice_only and scope == "person" and self.is_rehearsal(row["place"]):
                 continue  # a promise made in practice is kept in practice
             if scope == "here":
-                ok = row["place"] == scene.place
+                ok = row["place"] == scene.place and audience_fits(origin, scene.audience)
             elif scope == "owner":
                 ok = scene.audience == "owner"
             else:  # person: wherever I next talk with them, as long as that is no wider an audience

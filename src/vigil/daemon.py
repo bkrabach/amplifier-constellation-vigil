@@ -117,6 +117,7 @@ class Daemon:
         while not self._stop.is_set():
             try:
                 await self.mind.run_queued_tasks()
+                await self.mind.tend_wakes()
                 await self._maybe_dream()
                 if int(time.time()) % 3600 < 30:
                     self.store.prune()
