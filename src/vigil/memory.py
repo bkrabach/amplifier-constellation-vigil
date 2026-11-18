@@ -25,6 +25,7 @@ import json
 import logging
 import re
 import uuid
+from itertools import zip_longest
 from typing import Any
 
 from .config import Config
@@ -48,6 +49,26 @@ def _trust(surface: str) -> int:
 def _fts(query: str) -> str:
     words = re.findall(r"[\w']{2,}", query.lower())[:10]
     return " OR ".join(f'"{word}"' for word in words)
+
+
+#: Words that say nothing about what a message is about. Recall the agent did not ask
+#: for is matched on the rest, so "what is the status?" looks for "status" and not for
+#: every row that contains "the".
+_COMMON = frozenset("""
+a about again all also am an and any are as at be been but by can could did do does doing done for from get go got had has
+have he her here hers hey hi him his how if in into is it its just let like me more my no not now of ok okay on one or our
+out please she should so some than thank thanks that the their them then there these they this those to too up us very
+was we were what when where which who why will with would yes yet you your yours hello
+""".split())
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[\w']{2,}", (text or "").lower())
+
+
+def content_words(text: str, limit: int = 12) -> list[str]:
+    """The distinct words of a message that carry its subject, in order."""
+    return list(dict.fromkeys(word for word in _words(text) if word not in _COMMON))[:limit]
 
 
 def clip(text: str, limit: int) -> str:
@@ -494,30 +515,59 @@ class Memory:
         return [dict(r) | {"with": self.who_was_there(scene, r["people"])} for r in rows]
 
     def search(self, scene: Scene, query: str, limit: int = 6, asked: bool = True) -> list[dict[str, Any]]:
-        """``asked`` is True for a lookup the agent made itself. The recall that the
-        mind adds to a brief on its own passes False, so practice stays out of it."""
-        match = _fts(query)
+        """``asked`` is True for a lookup the agent made itself: up to ``limit`` notes,
+        then up to ``limit`` journal rows, by how well they match.
+
+        The recall that the mind adds to a brief on its own passes False and gets at
+        most ``limit`` rows in all, chosen the way a person's memory answers a remark:
+        what belongs to this room first, a note and a past exchange in turn, and another
+        room's only when it shares at least two of the message's subject words. Practice
+        stays out of it, and the audience rule is the same for both kinds of lookup."""
+        words = content_words(query) if not asked else []
+        match = " OR ".join(f'"{word}"' for word in words) if not asked else _fts(query)
         if not match:
             return []
-        hits: list[dict[str, Any]] = []
+        # Unasked recall reads further down the ranking, because this room's rows may
+        # sit below another room's in it.
+        reach = limit if asked else max(limit * 6, 24)
+        notes: list[dict[str, Any]] = []
         where, args = self._note_filter(scene, asked=asked)
         for row in self.store.q(
-            f"SELECT n.id,n.subject,n.text,n.ts,n.place,n.audience FROM notes_fts f JOIN notes n ON n.id=f.rowid "
+            f"SELECT n.id,n.subject,n.text,n.ts,n.place,n.audience,n.visibility FROM notes_fts f JOIN notes n ON n.id=f.rowid "
             f"WHERE notes_fts MATCH ? AND {where} ORDER BY bm25(notes_fts) LIMIT ?",
-            (match, *args, limit),
+            (match, *args, reach),
         ):
-            hits.append({"kind": "note", "id": row["id"], "subject": row["subject"], "text": row["text"], "ts": row["ts"]})
+            notes.append({"kind": "note", "id": row["id"], "subject": row["subject"], "text": row["text"], "ts": row["ts"],
+                          # A note the agent chose to carry everywhere is at home in every room.
+                          "_here": row["place"] == scene.place or row["visibility"] == "anywhere",
+                          "_text": f"{row['subject']} {row['text']}"})
+        journal: list[dict[str, Any]] = []
         where, args = self._journal_filter(scene, asked=asked)
         for row in self.store.q(
             f"SELECT j.id,j.ts,j.place,j.place_label,j.actor_name,j.heard,j.said,j.people FROM journal_fts f JOIN journal j ON j.id=f.rowid "
             f"WHERE journal_fts MATCH ? AND {where} ORDER BY bm25(journal_fts) LIMIT ?",
-            (match, *args, limit),
+            (match, *args, reach),
         ):
-            hits.append({
+            journal.append({
                 "kind": "journal", "id": row["id"], "ts": row["ts"], "where": row["place_label"], "who": row["actor_name"],
                 "heard": clip(row["heard"], 500), "said": clip(row["said"], 500),
                 "elsewhere": row["place"] != scene.place, "with": self.who_was_there(scene, row["people"]),
+                "_here": row["place"] == scene.place, "_text": f"{row['heard']} {row['said']}",
             })
+        if asked:
+            hits = notes + journal
+        else:
+            wanted = set(words)
+
+            def shared(hit: dict[str, Any]) -> int:
+                return len(wanted.intersection(_words(hit["_text"])))
+
+            here = [[hit for hit in kind if hit["_here"]] for kind in (notes, journal)]
+            hits = [hit for pair in zip_longest(*here) for hit in pair if hit]
+            hits += [hit for hit in notes + journal if not hit["_here"] and shared(hit) >= 2]
+            hits = hits[:limit]
+        for hit in hits:
+            del hit["_here"], hit["_text"]
         return hits
 
     # ---- thoughts ------------------------------------------------------------------

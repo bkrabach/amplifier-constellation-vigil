@@ -38,6 +38,9 @@ MAINTENANCE_META = "com.microsoft.amplifier.maintenance"
 TOOL_META = "com.microsoft.amplifier.tool"
 MESSAGE_META = "com.microsoft.amplifier.message"
 EFFORTS = ("low", "medium", "high")
+#: The scene of the nightly pass. It belongs to no conversation, so "here" in it names
+#: no place that anyone but the owner, in private, could read a note from.
+DREAM_PLACE = "background:dream"
 _GREETING = re.compile(r"^\W*(hi|hey|hello|yo|thanks|thank you|thx|ok|okay|cool|nice|great|good (morning|night|evening)|gm|gn|lol|👍|🙏)\W*$", re.I)
 _RECALL_HINT = re.compile(r"\b(remember|recall|earlier|last time|yesterday|before|again|previously|we (talked|discussed|agreed|decided)|you said|you mentioned|as usual|still)\b", re.I)
 _FOLLOW_UP_LINE = re.compile(r"\n?SLACK_FOLLOW_UP \{.*\}\s*$", re.S)
@@ -284,6 +287,8 @@ class Mind:
         self.tool_inputs: dict[str, Any] = {}
         self.tools_ok: set[str] = set()
         self.tools_warned: set[str] = set()
+        #: The places tonight's consolidation entries came from, while the pass runs.
+        self.dream_places: list[str] = []
         self.scenes: dict[str, Scene] = {}
         self.servers: dict[str, list[dict[str, Any]]] = {}
         self.options: dict[str, list[dict[str, Any]]] = {}
@@ -730,9 +735,18 @@ class Mind:
                 raise ToolError("Give both a subject and a note.")
             target = scene
             place = str(args.get("place") or "")
+            visibility = str(args.get("visibility") or "here")
             if place and scene.surface == "background" and scene.audience == "owner":
                 target = self._scene_for_place(sid, place)
-            note_id = memory.note_add(target, subject, text, str(args.get("visibility") or "here"))
+            elif scene.place == DREAM_PLACE and visibility == "here":
+                # A live agent's nightly pass saved its summary of a game world as "here"
+                # with no place. It was kept where only the owner's private sessions read
+                # it, so the agent could not recall its own summary in that world.
+                known = f" Tonight's entries came from: {', '.join(self.dream_places)}." if self.dream_places else ""
+                raise ToolError(
+                    'In this pass "here" needs the place the note belongs to: add place, with the "place" value of the entries it came from.'
+                    f'{known} Saved without it, the note could be read only in private sessions with your owner; if that is what you mean, use visibility "owner".')
+            note_id = memory.note_add(target, subject, text, visibility)
             return f"Saved as note #{note_id}."
         if name == "mind_forget":
             return "Retired." if memory.note_archive(scene, int(args.get("note_id") or 0)) else "No such note is readable here."
@@ -947,8 +961,12 @@ class Mind:
             entries = [{"place": r["place"], "where": r["place_label"], "visibility": "owner" if r["audience"] == "owner" else "here",
                         "when": datetime.datetime.fromtimestamp(r["ts"]).strftime("%Y-%m-%d %H:%M"), "who": r["actor_name"],
                         "heard": clip(r["heard"], 900), "you_said": clip(r["said"], 900)} for r in kept[:40]]
-            scene = Scene(session="dream", surface="background", place="background:dream", place_label="your consolidation pass", audience="owner", actor_person="owner")
-            await self.home.run(scene, prompts.DREAM + "\n" + json.dumps(entries, ensure_ascii=False, indent=1), self.config.background_runtime)
+            scene = Scene(session="dream", surface="background", place=DREAM_PLACE, place_label="your consolidation pass", audience="owner", actor_person="owner")
+            self.dream_places = list(dict.fromkeys(entry["place"] for entry in entries if entry["visibility"] == "here" and entry["place"]))
+            try:
+                await self.home.run(scene, prompts.DREAM + "\n" + json.dumps(entries, ensure_ascii=False, indent=1), self.config.background_runtime)
+            finally:
+                self.dream_places = []
         self.store.run(f"UPDATE journal SET consolidated=1 WHERE id IN ({','.join('?' * len(rows))})", [r["id"] for r in rows])
         self.store.meta_set("last_dream", datetime.date.today().isoformat())
         return {"entries": len(rows), "kept": len(kept)}
