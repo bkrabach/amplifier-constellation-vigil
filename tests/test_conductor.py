@@ -185,6 +185,38 @@ def test_a_restart_waits_for_a_running_turn(run):
     run(scenario)
 
 
+def test_a_script_can_make_its_restart_wait_for_running_turns(run):
+    """A deploy printed how many turns were running and restarted on the next line. One
+    was, in a live conversation, and the service unit then let the stop signal reach the
+    engine as well, so the daemon's wait protected nothing."""
+    import argparse
+
+    from vigil.cli import cmd_status
+
+    def status(wait):
+        cmd_status(argparse.Namespace(home=str(config_home), json=True, wait_idle=wait))
+
+    async def scenario(config, daemon):
+        nonlocal config_home
+        config_home = config.home
+        client = Client()
+        await client.attach(config)
+        sid = (await client.conn.send_request("session/new", {"cwd": config.workspace, "mcpServers": []}))["sessionId"]
+        turn = asyncio.create_task(client.conn.send_request("session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": slack("C1", "U2", "slow-turn please")}]}))
+        await asyncio.sleep(0.3)
+        with pytest.raises(SystemExit) as refused:
+            await asyncio.to_thread(status, 0)  # a turn is running: not idle, and it says so with its exit status
+        assert refused.value.code == 3 and not turn.done()
+        await asyncio.to_thread(status, 10)  # waits for it
+        assert turn.done() and (await turn)["stopReason"] == "end_turn"
+        await client.close()
+
+    config_home = None
+    run(scenario)
+    unit = (HERE.parent / "install.sh").read_text()
+    assert "KillMode=mixed" in unit and "KillMode=control-group" not in unit  # the stop signal goes to the daemon alone
+
+
 def test_permissions_own_tools_only(run):
     async def scenario(config, daemon):
         client = Client()
