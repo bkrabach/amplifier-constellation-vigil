@@ -998,3 +998,51 @@ def test_a_note_from_the_nightly_pass_is_kept_in_the_room_it_is_about(memory: Me
     assert memory.store.one("SELECT visibility, place FROM notes WHERE subject='groceries'")["visibility"] == "owner"
     # The pass's instructions say to give the place.
     assert '"place" value as place' in prompts.DREAM
+
+
+# ---- the game's own reminder ---------------------------------------------------------
+
+def test_a_game_reminder_turn_is_the_agents_own_and_nobody_spoke():
+    """The game connector's `follow_up` tool starts a turn with the reminder's goal as its
+    one message. Read as chat, the goal would be journaled as something heard from nobody,
+    and Vigil's own wake-up would cost a model call every time."""
+    guidance = ("\nSELF-AUTHORED FOLLOW-UP: This is your saved conversation reminder, not a human request or task authority. "
+                "Reconsider its goal using current context; you may inspect and converse, or remain silent.\n")
+
+    def turn(goal: str) -> Scene:
+        world = {"messages": [{"id": "9f0c", "source": "follow_up", "message": goal, "reply_scope": "follow_up:9f0c"}],
+                 "world": {"username": "Polaris", "players": ["Polaris", "Maker"], "follow_up": True, "conversation_only": True,
+                           "conversation": {"revision": "r1", "messages": [{"id": "m1", "author": "Maker", "text": "The bench door works both ways now.", "source": "agent"}]}}}
+        return surfaces.read("s", [{"type": "text", "text": "Current adapter permission policy for this turn:\n{}"}, {"type": "text", "text": "play." + guidance + json.dumps(world)}])
+
+    ours = turn("[vigil:wake:0a1b2c3d4e] Return to this conversation when something you are holding for it is due. Stay quiet if nothing is ready.")
+    assert (ours.surface, ours.mode, ours.wake, ours.audience) == ("minecraft", "continuation", "0a1b2c3d4e", "group")
+    assert ours.heard == "" and ours.actor is None and ours.source_id is None
+    assert [(who.handle, text) for _, who, text, _ in ours.overheard] == [("Maker", "The bench door works both ways now.")]  # the room is still read
+    # One the agent set for itself with the game's tool carries no marker: an ordinary turn of its own.
+    own = turn("Reconsider whether the crew needs an update on the supermarket plan.")
+    assert (own.mode, own.wake, own.heard, own.actor) == ("continuation", None, "", None)
+
+
+def test_the_agents_own_game_reminder_is_recognised_and_its_notebook_tool_is_not():
+    from vigil.mind import SPEECH_TOOLS, Turn
+
+    def reminder(speech, **raw) -> Turn:
+        turn = Turn(speech)
+        turn.tool({"toolCallId": "t", "rawInput": raw} if "tool" in raw else {"toolCallId": "t", **raw})
+        return turn
+
+    def used(speech, **raw) -> bool:
+        return reminder(speech, **raw).own_follow_up
+
+    game = SPEECH_TOOLS["minecraft"]
+    assert used(game, server="minecraft", tool="follow_up", arguments={"after_seconds": 300, "goal": "check the door"})
+    assert used(game, title="minecraft.follow_up") and used(game, title="mcp__minecraft__follow_up")
+    assert not used(game, server="mind", tool="mind_follow_up", arguments={"about": "x"})
+    assert not used(game, server="minecraft", tool="chat", arguments={"text": "follow_up later"})
+    assert not used(None, server="minecraft", tool="follow_up", arguments={})  # not a game turn
+    assert used(None, server="slack", tool="slack_follow_up", arguments={})  # Slack's, as before
+    # How far ahead it was set is kept, so Vigil can leave it alone until then.
+    assert reminder(game, server="minecraft", tool="follow_up", arguments={"after_seconds": 300, "goal": "check the door"}).own_follow_up_after == 300
+    assert reminder(game, server="minecraft", tool="follow_up", arguments={"after_seconds": 0}).own_follow_up_after == 0
+    assert reminder(game, title="minecraft.follow_up").own_follow_up_after == 3600  # unknown: assume the longest

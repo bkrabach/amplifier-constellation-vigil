@@ -342,6 +342,13 @@ def _minecraft(scene: Scene, texts: list[str]) -> bool:
                 scene.mode = "voice"
         if source in ("activity", "continuation"):
             scene.mode = "ambient" if source == "activity" else "continuation"
+        if source == "follow_up":
+            # The agent's own reminder coming due, through the connector's `follow_up`
+            # tool. Nobody spoke: the text is the private goal the reminder was set
+            # with, and one that Vigil armed carries Vigil's marker.
+            found = KEEPALIVE.search(scene.heard)
+            scene.mode, scene.wake = "continuation", found.group(1) if found else None
+            scene.heard, scene.actor, scene.source_id = "", None, None
     if world.get("ambient_activity") or world.get("peer_proposal"):
         scene.mode = "ambient"
     if scene.audience == "group":

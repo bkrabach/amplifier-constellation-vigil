@@ -106,9 +106,9 @@ class McpServer:
         return _rpc(request_id, error=(-32601, f"Method not found: {method}"))
 
 
-async def call_tool(http: aiohttp.ClientSession, server: dict[str, Any], name: str, arguments: dict[str, Any], timeout: float = 6.0) -> dict[str, Any]:
-    """Call one tool on an HTTP MCP server described the way ACP describes it in
-    `mcpServers` (`{type:"http", url, headers:[{name,value}]}`)."""
+async def _open(http: aiohttp.ClientSession, server: dict[str, Any], timeout: float) -> Any:
+    """Start a session with an HTTP MCP server described the way ACP describes it in
+    `mcpServers` (`{type:"http", url, headers:[{name,value}]}`) and return its sender."""
     headers = {h["name"]: h["value"] for h in server.get("headers") or [] if isinstance(h, dict) and h.get("name")}
     headers.update({"Content-Type": "application/json", "Accept": "application/json, text/event-stream"})
     limit = aiohttp.ClientTimeout(total=timeout)
@@ -135,7 +135,23 @@ async def call_tool(http: aiohttp.ClientSession, server: dict[str, Any], name: s
     if not isinstance(init, dict) or "result" not in init:
         raise RuntimeError("initialize failed")
     await post({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    return post
+
+
+async def call_tool(http: aiohttp.ClientSession, server: dict[str, Any], name: str, arguments: dict[str, Any], timeout: float = 6.0) -> dict[str, Any]:
+    """Call one tool on a connector's MCP server. A result with `isError` is returned
+    as it is: the caller decides what a refusal means."""
+    post = await _open(http, server, timeout)
     reply = await post({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": name, "arguments": arguments}})
     if not isinstance(reply, dict) or "result" not in reply:
         raise RuntimeError(str((reply or {}).get("error") or "call failed")[:200])
     return reply["result"]
+
+
+async def list_tools(http: aiohttp.ClientSession, server: dict[str, Any], timeout: float = 4.0) -> set[str]:
+    """The names of the tools a connector's MCP server offers."""
+    post = await _open(http, server, timeout)
+    reply = await post({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+    if not isinstance(reply, dict) or "result" not in reply:
+        raise RuntimeError(str((reply or {}).get("error") or "list failed")[:200])
+    return {str(tool.get("name")) for tool in reply["result"].get("tools") or [] if isinstance(tool, dict)}
