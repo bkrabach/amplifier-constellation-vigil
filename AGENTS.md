@@ -112,6 +112,20 @@ Find which layer lacks it before changing anything, because each has a different
 
 The last three belong to the connector. Report them to its owners with what you measured; do not teach Vigil a connector's limits in a prompt, where they go stale.
 
+## Files in a conversation
+
+Vigil sets no limit of its own on files. It relays every prompt part and every tool-call update unchanged, and reads only text parts for its own memory. So nothing from an attached file enters the journal or recall: after a compaction, or in another conversation, the agent has a file's content only if it wrote a note or can read the file again with a tool.
+
+The limits are the engine's (`src/media.rs` and `src/engine.rs` in the Runtime repository), and they are the first place to look when a turn with files fails:
+
+- **A prompt has at most 32 parts, and Vigil's brief is one of them.** The connector and the Instance have 31.
+- **A prompt has at most 256 KiB of text**, counting every text part and every attached text file. Over that the engine refuses the whole prompt, so the turn fails, not only the file. A busy Slack thread already sent 170,000 to 190,000 bytes of text per prompt before any file.
+- **A file sent as bytes is read only if it is labelled `text/*`, JSON or XML and is valid UTF-8.** Any other label gives the model a size and a hash.
+- **A tool result is cut at `limits.tool_output_bytes`** (65,536 unless the home's engine settings say otherwise), so a tool that reads documents has to return them in pages.
+- **From engine 0.15.14 the agent can attach a workspace document to its reply** (`workspace_attach_file`: Markdown, text, CSV or JSON, up to 200,000 bytes). The engine asks no permission for it, and Vigil's audience rule covers memory, not workspace files.
+
+When measuring a live agent's prompts, count sizes and hashes; never copy message text out of its home.
+
 ## Linking one of the owner's accounts
 
 Add the account to `[owner] identities` in `vigil.toml` and restart. The restart makes the account the owner's and, when the earlier person was known only through it, moves that person's history to the owner; `vigil people` shows the result. Before 0.1.4 the restart moved the account and left the history on a stranger with the old name.
