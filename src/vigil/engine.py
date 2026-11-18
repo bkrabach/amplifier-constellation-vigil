@@ -34,7 +34,20 @@ REPOSITORY = "microsoft/amplifier-constellation-runtime"
 #: From 0.15.11 a session can compact after a reply with reasoning and no text; before
 #: that, such a turn failed and the input waiting behind it was lost. 0.15.10 added an
 #: approval-policy profile that applies only when the client negotiates it.
+#: From 0.15.12 a long session keeps only the newest presence brief after a native
+#: checkpoint too, and an Anthropic request leaves out reasoning whose instructions,
+#: tools or earlier messages have since changed, which newer accounts refuse.
 RELEASES: dict[str, dict[str, dict[str, str]]] = {
+    "0.15.12": {
+        "linux-aarch64": {
+            "asset_sha256": "b479ccb72d7fc26a7514999649b98681edcfdc23a2ca3b999a3e1d02ea41ed40",
+            "binary_sha256": "b3a2259cc2e2bd8dfff7b96a7b09497f37af8cee02cc3fbae95cd19dc33ca310",
+        },
+        "linux-x86_64": {
+            "asset_sha256": "9af6ab516fb40372e703f5d27c2ef9280517f058090d0497daa4a11c948cdf91",
+            "binary_sha256": "52fe191a21a4ef80d61f073ba83fd636c6af86e1698e5f2fd0ca749445af270b",
+        },
+    },
     "0.15.11": {
         "linux-aarch64": {
             "asset_sha256": "b0ad6b987ce3a75e75b2c5aadad49c9f295daf86c769f047e4aa4f4e8776275a",
@@ -76,7 +89,7 @@ RELEASES: dict[str, dict[str, dict[str, str]]] = {
         },
     },
 }
-DEFAULT_VERSION = "0.15.11"
+DEFAULT_VERSION = "0.15.12"
 
 #: Mind tools that change Vigil's own memory. The engine is told it may call them
 #: without asking, since nothing outside Vigil is affected.

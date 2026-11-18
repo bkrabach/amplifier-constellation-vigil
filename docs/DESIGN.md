@@ -44,7 +44,7 @@ Three details matter.
 
 It is appended *after* the person's content. The native engine derives a session's title from the first text it sees, and clients replay stored prompts when a session is loaded. Placing the brief last keeps titles and replays about what was said. Vigil also removes its brief from replayed history.
 
-It carries a context-snapshot key (`com.microsoft.amplifier.context-snapshot`). A runtime that supports that profile can keep only the newest brief in the model's context, so a long conversation does not accumulate one brief per turn. How far a runtime goes is its own choice: the native engine does this until it first compacts a session through the provider, and from then on keeps each turn's blocks whole until the next compaction.
+It carries a context-snapshot key (`com.microsoft.amplifier.context-snapshot`). A runtime that supports that profile can keep only the newest brief in the model's context, so a long conversation does not accumulate one brief per turn. How far a runtime goes is its own choice. From 0.15.12 the native engine keeps doing this after it has compacted a session through the provider; earlier versions kept each turn's blocks whole from the first compaction on.
 
 It has a budget (`mind.brief_max_chars`, 2,800 characters by default). When a brief is over it, the lines least certain to matter go first: recalled notes, then news from other places, then notes about the people present. Who is speaking, who is who, how a reply is delivered here, what is due and the owner's standing instructions are never cut.
 
