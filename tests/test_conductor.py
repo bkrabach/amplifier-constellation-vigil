@@ -727,6 +727,11 @@ def test_an_operator_can_hold_wake_ups_for_a_place_without_a_restart(run):
         await asyncio.to_thread(wake, hold=["slack:T9"], release=["minecraft"])
         await daemon.mind.tend_wakes()
         assert [call["name"] for call in tools.calls] == ["follow_up"] and 590 <= tools.calls[0]["arguments"]["after_seconds"] <= 605
+        # The note of the agent's own reminder holds for an hour at most: a later time is not a reminder.
+        daemon.store.meta_set(f"wake:{scene.place}", "0")
+        daemon.store.meta_set(f"wake-own:{scene.place}", str(time.time() + 86400))
+        await daemon.mind.tend_wakes()
+        assert len(tools.calls) == 2
         await client.close()
         await tools.stop()
     run(scenario)

@@ -823,7 +823,8 @@ class Mind:
             self.store.meta_set(own, str(now() + turn.own_follow_up_after) if turn.own_follow_up_after else "0")
             return False
         try:
-            if now() < float(self.store.meta_get(own) or 0):
+            # A connector's reminder is at most an hour ahead; a later time here is not one.
+            if now() < float(self.store.meta_get(own) or 0) <= now() + 3600:
                 return True  # the turn the agent's own reminder starts will end here too
         except ValueError:
             pass
