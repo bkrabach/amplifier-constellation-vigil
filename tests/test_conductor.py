@@ -681,3 +681,52 @@ def test_a_wake_up_that_keeps_failing_comes_back_more_slowly(run):
         await client.close()
         await tools.stop()
     run(scenario)
+
+
+def test_an_operator_can_hold_wake_ups_for_a_place_without_a_restart(run):
+    """While another component repaired a game session, its owner asked that no reminder
+    be set there. Vigil had no control for that short of a setting and a restart."""
+    import argparse
+
+    from vigil.cli import cmd_wake
+
+    async def scenario(config, daemon):
+        def wake(**change):
+            cmd_wake(argparse.Namespace(home=str(config.home), json=True, hold=change.get("hold"), release=change.get("release")))
+
+        tools = GameTools()
+        await tools.start()
+        client = Client()
+        await client.attach(config)
+        state = config.home / "fake-state.json"
+
+        async def session(servers, blocks):
+            sid = (await client.conn.send_request("session/new", {"cwd": config.workspace, "mcpServers": servers}))["sessionId"]
+            await client.conn.send_request("session/prompt", {"sessionId": sid, "prompt": blocks})
+            return sid
+
+        await asyncio.to_thread(wake, hold=["minecraft"])  # set from outside, while the daemon runs
+        game_sid = await session([tools.server], chat(1, "hello there"))
+        scene = daemon.mind.scenes[game_sid]
+        # The connector is still asked what it offers, and its address is kept, so a release needs no further turn.
+        assert tools.listed == 1 and scene.place in json.loads((config.secrets_dir / "wake-servers.json").read_text())
+
+        owner_sid = await session([], [{"type": "text", "text": slack("D9", "UOWNER", "a job for you")}])
+        token = next(token for token, sid in daemon.mind.tokens.items() if sid == owner_sid)
+        said = await daemon.mind.call(token, "mind_follow_up", {"about": "Direct the door work and tell me how it went.", "where": "minecraft world"})
+        assert "cannot wake you on its own" in said  # the agent is told the truth for now
+        daemon.memory.thought_add(scene, "followup", "Ask Wren about the roof.", time.time() + 600)
+        await client.conn.send_request("session/prompt", {"sessionId": game_sid, "prompt": chat(2, "anyone seen the iron?")})
+        await daemon.mind.tend_wakes()
+        assert tools.calls == []  # not at the end of a turn, not between turns, not when work is sent there
+        brief = json.loads(state.read_text())[game_sid]["prompts"][-1][-1]["text"]
+        assert "Direct the door work and tell me how it went." in brief and "You can come back to it here" not in brief
+        assert [row["state"] for row in daemon.store.q("SELECT state FROM thoughts ORDER BY id")] == ["pending", "pending"]  # what is held stays held
+
+        # A hold elsewhere does not apply here, and releasing this one needs no restart and no new turn.
+        await asyncio.to_thread(wake, hold=["slack:T9"], release=["minecraft"])
+        await daemon.mind.tend_wakes()
+        assert [call["name"] for call in tools.calls] == ["follow_up"] and 590 <= tools.calls[0]["arguments"]["after_seconds"] <= 605
+        await client.close()
+        await tools.stop()
+    run(scenario)

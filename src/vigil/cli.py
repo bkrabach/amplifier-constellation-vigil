@@ -162,6 +162,30 @@ def _control(args: argparse.Namespace, path: str, method: str = "GET") -> dict:
     raise AssertionError("unreachable")
 
 
+def cmd_wake(args: argparse.Namespace) -> None:
+    """Hold or release wake-ups for a place. The list lives in the state database and
+    the daemon reads it on every decision, so no restart is needed either way."""
+    from .config import Config
+    from .mind import WAKE_HOLD
+    from .store import Store
+
+    store = Store(Config.load(args.home).db_path)
+    try:
+        held = json.loads(store.meta_get(WAKE_HOLD) or "[]")
+    except ValueError:
+        held = []
+    held = [entry for entry in held if isinstance(entry, str) and entry]
+    if args.hold or args.release:
+        held = sorted((set(held) | set(args.hold or [])) - set(args.release or []))
+        store.meta_set(WAKE_HOLD, json.dumps(held))
+    if args.json:
+        print(json.dumps({"held": held}))
+        return
+    print("Wake-ups are held for: " + (", ".join(held) if held else "nothing"))
+    if held:
+        print("While a hold lasts Vigil asks no connector to bring the agent back there. What it holds for the place stays in its brief.")
+
+
 def cmd_status(args: argparse.Namespace) -> None:
     import time
 
@@ -336,6 +360,12 @@ def main() -> None:
     p.add_argument("--json", action="store_true")
     p.add_argument("--wait-idle", type=float, metavar="SECONDS", help="wait up to this long for no turn to be running; exit 3 if one still is")
     p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser("wake", help="show, hold or release wake-ups for a place")
+    p.add_argument("--hold", action="append", metavar="PLACE", help="a surface name (minecraft, slack) or the start of a place key; repeatable")
+    p.add_argument("--release", action="append", metavar="PLACE", help="end a hold; repeatable")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_wake)
 
     p = sub.add_parser("dream", help="run the consolidation pass now")
     p.set_defaults(func=lambda a: print(json.dumps(_control(a, "/control/dream", "POST"))))

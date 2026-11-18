@@ -194,6 +194,7 @@ The other direction, the agent noticing what happens in the world while you talk
 | `vigil memory places` / `vigil memory forget` | Where the agent has been, and a way to remove a practice run: `forget --place KEY-PREFIX [--since 2h] [--people]` counts what it would delete; add `--apply` to delete. |
 | `vigil people` | Who the agent knows and which accounts are linked. `vigil people confirm --surface S --handle H` accepts a pending identity claim. |
 | `vigil dream` | Run the consolidation pass now. It runs nightly at `mind.dream_at`. |
+| `vigil wake` | Show, hold (`--hold PLACE`) or release (`--release PLACE`) wake-ups for a place, with no restart. While held, Vigil asks no connector to bring the agent back there; what it holds for the place stays in its brief. |
 | `vigil engine show` / `apply` | Inspect the engine settings, or re-apply Vigil's settings after an edit. |
 
 Standing instructions from the owner go in `memory/instructions.md`. They are part of every brief.
