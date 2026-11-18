@@ -72,6 +72,11 @@ async def handler(method: str, params, is_notification: bool):
             await _update(sid, {"sessionUpdate": "agent_message_chunk", "messageId": "m1", "content": {"type": "text", "text": f"part{index} "}})
         if "slow-turn" in text:
             await asyncio.sleep(1.2)
+        if "try-chat" in text:
+            # A chat line the connector never confirms: tried, and not said.
+            await _update(sid, {"sessionUpdate": "tool_call", "toolCallId": "t8", "title": "chat", "kind": "other", "status": "pending",
+                                "rawInput": {"server": "minecraft", "tool": "chat", "arguments": {"text": "Is the door wired yet?"}}})
+            return {"stopReason": "end_turn"}
         if "set-own-reminder" in text:
             await _update(sid, {"sessionUpdate": "tool_call", "toolCallId": "t9", "title": "follow_up", "kind": "other", "status": "pending",
                                 "rawInput": {"server": "minecraft", "tool": "follow_up", "arguments": {"after_seconds": 900, "goal": "check on the door"}}})

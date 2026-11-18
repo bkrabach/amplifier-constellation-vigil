@@ -15,6 +15,7 @@ from acp.connection import Connection
 from vigil.brief import CLOSE, OPEN
 from vigil.config import Config
 from vigil.daemon import Daemon
+from vigil.surfaces import Scene
 
 HERE = Path(__file__).parent
 
@@ -362,7 +363,7 @@ class GameTools:
     keeps one reminder. `offer=False` is a connector from before `follow_up` existed."""
 
     def __init__(self, offer: bool = True) -> None:
-        self.offer, self.refuse, self.calls, self.listed = offer, False, [], 0
+        self.offer, self.refuse, self.calls, self.listed, self.token = offer, False, [], 0, "game-token"
         self.port = free_port()
         self.server = {"type": "http", "name": "minecraft", "url": f"http://127.0.0.1:{self.port}/mcp",
                        "headers": [{"name": "Authorization", "value": "Bearer game-token"}]}
@@ -371,7 +372,8 @@ class GameTools:
         from aiohttp import web
 
         body = await request.json()
-        assert request.headers.get("Authorization") == "Bearer game-token"
+        if request.headers.get("Authorization") != "Bearer " + self.token:
+            return web.Response(status=401)
         method = body.get("method")
 
         def result(value):
@@ -513,6 +515,7 @@ def test_work_the_owner_sends_to_the_game_gets_a_turn_there(run):
         await client.conn.send_request("session/prompt", {"sessionId": game_sid, "prompt": reminder(tools.calls[0]["arguments"]["goal"], {"note": "stay-silent"})})
         brief = json.loads(state.read_text())[game_sid]["prompts"][-1][-1]["text"]
         assert "Direct the door work and tell me how it went." in brief and "Your owner asked this of you in private" in brief
+        assert "You can come back to it here without waiting for someone to speak" in brief
         work = daemon.store.one("SELECT state, delivered FROM thoughts")
         assert work["state"] == "pending" and work["delivered"]  # seen, and open until the agent closes it
         assert len(tools.calls) == 1
@@ -531,4 +534,118 @@ def test_work_the_owner_sends_to_the_game_gets_a_turn_there(run):
         await client.close()
         await tools.stop()
         await old.stop()
+    run(scenario)
+
+
+async def started(config: Config) -> tuple[Daemon, asyncio.Task]:
+    daemon = Daemon(config)
+    task = asyncio.create_task(daemon.run())
+    for _ in range(100):
+        if config.socket_path.exists():
+            break
+        await asyncio.sleep(0.02)
+    return daemon, task
+
+
+def test_a_restart_does_not_leave_held_work_waiting_for_someone_to_speak(tmp_path):
+    """The game hands its tool server to a session. Kept only in memory, a restart left
+    Vigil unable to ask the game for a turn until someone spoke there again: on a live
+    agent, a restart nine minutes after its owner handed it work in the game."""
+    async def body():
+        config = make_home(tmp_path, free_port())
+        tools = GameTools()
+        await tools.start()
+        saved = config.secrets_dir / "wake-servers.json"
+
+        daemon, task = await started(config)
+        client = Client()
+        await client.attach(config)
+        sid = (await client.conn.send_request("session/new", {"cwd": config.workspace, "mcpServers": [tools.server]}))["sessionId"]
+        await client.conn.send_request("session/prompt", {"sessionId": sid, "prompt": chat(1, "hello there")})
+        place = daemon.mind.scenes[sid].place
+        assert json.loads(saved.read_text())[place]["server"] == tools.server
+        assert saved.stat().st_mode & 0o777 == 0o600 and saved.parent.stat().st_mode & 0o077 == 0
+        await client.close()
+        daemon._stop.set()
+        await task
+        # The connector's credential is in that one private file: not in the records, not in a log.
+        for path in [config.db_path, *config.home.glob("state.sqlite3*"), *config.home.glob("logs/*")]:
+            assert b"game-token" not in path.read_bytes(), path
+
+        daemon, task = await started(config)
+        try:
+            mind = daemon.mind
+            client = Client()
+            await client.attach(config)
+            owner_sid = (await client.conn.send_request("session/new", {"cwd": config.workspace, "mcpServers": []}))["sessionId"]
+            await client.conn.send_request("session/prompt", {"sessionId": owner_sid, "prompt": [{"type": "text", "text": slack("D9", "UOWNER", "a job for you")}]})
+            token = next(token for token, session in mind.tokens.items() if session == owner_sid)
+            # No game session is attached to this daemon. Work sent there still gets its turn.
+            said = await mind.call(token, "mind_follow_up", {"about": "Direct the door work and tell me how it went.", "where": "minecraft world"})
+            assert "will give you a turn for it when it is due" in said
+            assert len(tools.calls) == 1 and tools.calls[0]["arguments"]["after_seconds"] == 5
+
+            # Between turns the daemon looks for a wake-up that is owed and not set.
+            key = f"wake:{place}"
+            await mind.tend_wakes()
+            assert len(tools.calls) == 1  # one is set
+            daemon.store.meta_set(key, str(time.time() - 100))
+            await mind.tend_wakes()
+            assert len(tools.calls) == 1  # its time has passed, but the connector may still be waiting to admit it
+            daemon.store.meta_set(key, str(time.time() - 1000))
+            await mind.tend_wakes()
+            assert len(tools.calls) == 2  # long overdue: taken for lost (a Stop cancels it), and asked for again
+            # A refusal is looked at again later, not on every pass.
+            tools.refuse = True
+            daemon.store.meta_set(key, "0")
+            await mind.tend_wakes()
+            await mind.tend_wakes()
+            assert len(tools.calls) == 3
+            tools.refuse = False
+            # With nothing owed, nothing is asked.
+            daemon.store.run("UPDATE thoughts SET state='cancelled'")
+            daemon.store.meta_set(key, "0")
+            await mind.tend_wakes()
+            assert len(tools.calls) == 3
+            # A connector that no longer accepts the saved credential is forgotten, until a turn there brings the new one.
+            daemon.memory.thought_add(Scene(session=sid, surface="minecraft", place=place, audience="group"), "followup", "Ask about the roof.", 0)
+            tools.token = "rotated"
+            await mind.tend_wakes()
+            assert json.loads(saved.read_text()) == {} and len(tools.calls) == 3
+            await mind.tend_wakes()
+            await client.close()
+        finally:
+            daemon._stop.set()
+            await task
+            await tools.stop()
+    asyncio.run(body())
+
+
+def test_a_wake_up_that_keeps_failing_comes_back_more_slowly(run):
+    async def scenario(config, daemon):
+        tools = GameTools()
+        await tools.start()
+        client = Client()
+        await client.attach(config)
+        sid = (await client.conn.send_request("session/new", {"cwd": config.workspace, "mcpServers": [tools.server]}))["sessionId"]
+
+        async def prompt(blocks):
+            return await client.conn.send_request("session/prompt", {"sessionId": sid, "prompt": blocks})
+
+        await prompt(chat(1, "hello there"))
+        daemon.memory.thought_add(daemon.mind.scenes[sid], "followup", "Ask Wren whether the door is wired.", time.time() + 60)
+        await prompt(chat(2, "back soon"))
+        waits = []
+        for _ in range(3):
+            daemon.store.run("UPDATE thoughts SET due=0")
+            # The model tries to say it and the connector never confirms the line.
+            await prompt(reminder(tools.calls[-1]["arguments"]["goal"], {"note": "try-chat"}))
+            assert daemon.store.one("SELECT state FROM thoughts")["state"] == "pending"  # not said, so still owed
+            waits.append(tools.calls[-1]["arguments"]["after_seconds"])
+        assert waits == [300, 600, 1200]
+        # Said at last: it is settled, and the next failure starts from the short wait again.
+        await prompt(reminder(tools.calls[-1]["arguments"]["goal"]))
+        assert daemon.store.one("SELECT state FROM thoughts")["state"] == "delivered" and daemon.mind.wake_misses[daemon.mind.scenes[sid].place] == 0
+        await client.close()
+        await tools.stop()
     run(scenario)

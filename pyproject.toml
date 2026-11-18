@@ -1,6 +1,6 @@
 [project]
 name = "amplifier-constellation-vigil"
-version = "0.1.13"
+version = "0.1.14"
 description = "Vigil: an always-on mind for an Amplifier Constellation Agent Instance. ACP conductor, presence brief, memory, decisions and timers over any ACP runtime."
 readme = "README.md"
 requires-python = ">=3.12"
