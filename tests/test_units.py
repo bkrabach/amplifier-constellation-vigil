@@ -896,3 +896,105 @@ def test_the_bridge_runs_with_the_home_on_either_side_of_acp(monkeypatch):
         monkeypatch.setattr("sys.argv", argv)
         cli.main()
     assert homes == ["/h", "/h"]
+
+
+# ---- recall that belongs to the room -------------------------------------------------
+
+def test_unasked_recall_starts_with_this_room_and_leaves_out_weak_matches_from_others(memory: Memory):
+    """In a game world the owner asked "What is the status?". The brief's own recall was
+    four notes from Slack channels that contain the word "status", because notes came
+    before journal rows and a match on one common word was enough. The same question
+    asked in that world an hour earlier, and the answer given, were not shown."""
+    from vigil.memory import content_words
+
+    owner_slack, owner_game = Who("slack:T1", "UOWNER", "Olive"), Who("minecraft", "Olive77", "Olive77")
+    memory.assign("minecraft", "Olive77", memory.resolve(owner_slack), "the owner's own account")
+    channel = scene_for(memory, "slack:T1:CMEM", "group", Who("slack:T1", "U2", "Dana"), [owner_slack])
+    for n in range(5):
+        memory.note_add(channel, "memory design questions", f"Status of question {n}: the memory design is still open.", "here")
+    channel.heard = "what is the status of the memory design?"
+    memory.journal_add(channel, "The memory design is still open.", "", "end_turn")
+    game = scene_for(memory, "minecraft:world", "group", owner_game, [Who("minecraft", "Maker", "Maker", True)])
+    game.heard = "What is the status?"
+    memory.journal_add(game, "Six stews are stocked and the door is untested.", "", "end_turn")
+    memory.note_add(game, "place:Workshop world", "Status: six stews stocked, hidden door untested.", "here")
+
+    assert content_words("What is the status?") == ["status"] and content_words("ok, thanks!") == []
+    hits = memory.search(game, "What is the status?", 4, asked=False)
+    assert [(h["kind"], h.get("subject") or h["said"]) for h in hits] == [
+        ("note", "place:Workshop world"), ("journal", "Six stews are stocked and the door is untested.")]
+    assert all(set(h) == ({"kind", "id", "subject", "text", "ts"} if h["kind"] == "note" else
+                          {"kind", "id", "ts", "where", "who", "heard", "said", "elsewhere", "with"}) for h in hits)
+    assert "Six stews" in compose(game, memory, memory.config, {"recall": hits})[0]
+    # Two subject words in common bring the other room in, after this room's own.
+    hits = memory.search(game, "what is the status of the memory design?", 4, asked=False)
+    assert [h.get("subject") for h in hits[:1]] == ["place:Workshop world"] and len(hits) == 4
+    assert {h.get("subject") for h in hits[2:]} == {"memory design questions"}
+    # A message with no subject words recalls nothing.
+    assert memory.search(game, "what is this, and why?", 4, asked=False) == []
+    # A lookup the agent makes itself is as before: the other room's notes are found.
+    asked = memory.search(game, "status")
+    assert sum(h.get("subject") == "memory design questions" for h in asked) == 5
+    # Something the agent chose to carry everywhere is at home in every room.
+    memory.note_add(channel, "how I report", "A status report starts with what is blocked.", "anywhere")
+    assert "how I report" in [h.get("subject") for h in memory.search(game, "What is the status?", 4, asked=False)]
+    # The audience rule is unchanged: a room with nobody in common sees none of it, asked or not.
+    stranger = scene_for(memory, "slack:T1:COTH", "group", Who("slack:T1", "U8", "Rae"))
+    assert [h.get("subject") for h in memory.search(stranger, "status of the memory design", 4, asked=False)] == ["how I report"]
+    assert [h.get("subject") for h in memory.search(stranger, "status of the memory design")] == ["how I report"]
+
+
+def test_a_note_from_the_nightly_pass_is_kept_in_the_room_it_is_about(memory: Memory):
+    """A live agent's nightly pass saved its summary of a game world three nights running
+    with visibility "here" and no place. The pass belongs to no conversation, so each note
+    was kept where only the owner's private sessions read it, and the agent could not
+    recall its own summary in that world."""
+    import asyncio
+
+    from vigil.mcp import ToolError
+    from vigil.mind import DREAM_PLACE, Mind
+
+    class Bare(Mind):
+        def __init__(self, memory):
+            self.memory, self.store, self.config = memory, memory.store, memory.config
+            self.tokens, self.scenes, self.dream_places = {}, {}, []
+
+    def note(mind, session, **args):
+        return asyncio.run(mind.call(session, "mind_note", args))
+
+    def notes(scene, query):
+        return [h["subject"] for h in memory.search(scene, query) if h["kind"] == "note"]
+
+    mind = Bare(memory)
+    game = scene_for(memory, "minecraft:world", "group", Who("minecraft", "Wren", "Wren"))
+    game.heard = "the door works on the bench"
+    memory.journal_add(game, "", "", "end_turn")
+    dream = Scene(session="dream", surface="background", place=DREAM_PLACE, place_label="your consolidation pass", audience="owner", actor_person="owner")
+    mind.tokens["dream"], mind.scenes["dream"], mind.dream_places = "dream", dream, ["minecraft:world"]
+
+    for args in ({"visibility": "here"}, {}):
+        with pytest.raises(ToolError) as refused:
+            note(mind, "dream", subject="place:Workshop world", note="The piston door works on the bench.", **args)
+        assert "minecraft:world" in str(refused.value) and "owner" in str(refused.value)
+    assert memory.store.one("SELECT count(*) AS n FROM notes")["n"] == 0  # nothing was kept in the wrong place
+    with pytest.raises(ToolError):
+        note(mind, "dream", subject="place:Workshop world", note="x", visibility="here", place="minecraft:nowhere")
+
+    note(mind, "dream", subject="place:Workshop world", note="The piston door works on the bench.", visibility="here", place="minecraft:world")
+    assert notes(game, "piston door") == ["place:Workshop world"]
+    assert memory.note_subjects(game) == (1, ["place:Workshop world"])
+    # It is that room's note and no other's.
+    other = scene_for(memory, "slack:T1:COTH", "group", Who("slack:T1", "U8", "Rae"))
+    assert memory.search(other, "piston door") == [] and memory.note_subjects(other) == (0, [])  # nor that room's journal
+    # The pass can still keep something for the owner alone, or for everywhere, without a place.
+    note(mind, "dream", subject="person:Olive", note="Prefers the piston report in the morning.", visibility="owner")
+    note(mind, "dream", subject="how I report", note="A piston report starts with what is blocked.", visibility="anywhere")
+    assert set(notes(game, "piston report")) == {"how I report", "place:Workshop world"}
+    private = scene_for(memory, "slack:T1:D1", "dm", Who("slack:T1", "UOWNER", "Olive"))
+    assert set(notes(private, "piston")) == {"place:Workshop world", "person:Olive", "how I report"}
+    # In an ordinary private conversation "here" means that conversation, as before.
+    mind.tokens["p"], mind.scenes["p"] = "p", private
+    note(mind, "p", subject="groceries", note="Olive wants the piston parts list on Friday.")
+    assert memory.store.one("SELECT visibility, place FROM notes WHERE subject='groceries'")["visibility"] == "owner"
+    # The pass's instructions say to give the place.
+    assert '"place" value as place' in prompts.DREAM
