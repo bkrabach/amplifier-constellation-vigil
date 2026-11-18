@@ -65,6 +65,9 @@ class Scene:
     identity_name: str | None = None
     self_handle: str | None = None
     wake: str | None = None
+    #: This turn was started by the connector's one reminder for the conversation
+    #: coming due, whoever set it. Other continuation turns leave that reminder pending.
+    reminder: bool = False
     #: The source's own id for the message that started this turn, when it has one.
     source_id: str | None = None
     #: Other messages the experience showed with this turn that the agent did not take
@@ -200,7 +203,7 @@ def _slack(scene: Scene, text: str) -> bool:
         scene.audience = "group"
         scene.place_label = "a Slack channel"
     if "accepted_work_continuation" in data:
-        scene.mode = "continuation"
+        scene.mode, scene.reminder = "continuation", True
         note = json.dumps(data.get("accepted_work_continuation")) + str(data.get("continuation_note") or "")
         found = KEEPALIVE.search(note)
         scene.wake = found.group(1) if found else None
@@ -347,7 +350,7 @@ def _minecraft(scene: Scene, texts: list[str]) -> bool:
             # tool. Nobody spoke: the text is the private goal the reminder was set
             # with, and one that Vigil armed carries Vigil's marker.
             found = KEEPALIVE.search(scene.heard)
-            scene.mode, scene.wake = "continuation", found.group(1) if found else None
+            scene.mode, scene.wake, scene.reminder = "continuation", found.group(1) if found else None, True
             scene.heard, scene.actor, scene.source_id = "", None, None
     if world.get("ambient_activity") or world.get("peer_proposal"):
         scene.mode = "ambient"

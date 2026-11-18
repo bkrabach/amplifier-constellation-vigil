@@ -1017,11 +1017,15 @@ def test_a_game_reminder_turn_is_the_agents_own_and_nobody_spoke():
 
     ours = turn("[vigil:wake:0a1b2c3d4e] Return to this conversation when something you are holding for it is due. Stay quiet if nothing is ready.")
     assert (ours.surface, ours.mode, ours.wake, ours.audience) == ("minecraft", "continuation", "0a1b2c3d4e", "group")
-    assert ours.heard == "" and ours.actor is None and ours.source_id is None
+    assert ours.heard == "" and ours.actor is None and ours.source_id is None and ours.reminder
     assert [(who.handle, text) for _, who, text, _ in ours.overheard] == [("Maker", "The bench door works both ways now.")]  # the room is still read
     # One the agent set for itself with the game's tool carries no marker: an ordinary turn of its own.
     own = turn("Reconsider whether the crew needs an update on the supermarket plan.")
-    assert (own.mode, own.wake, own.heard, own.actor) == ("continuation", None, "", None)
+    assert (own.mode, own.wake, own.heard, own.actor, own.reminder) == ("continuation", None, "", None, True)
+    # The game continuing the agent's activity is a continuation turn too, and is not a reminder.
+    world = {"messages": [{"id": "k1", "source": "continuation", "message": "Continue your current activity."}], "world": {"username": "Polaris", "players": ["Polaris"]}}
+    going = surfaces.read("s", [{"type": "text", "text": "Current adapter permission policy for this turn:\n{}"}, {"type": "text", "text": "play.\n" + json.dumps(world)}])
+    assert (going.mode, going.reminder, going.wake) == ("continuation", False, None)
 
 
 def test_the_agents_own_game_reminder_is_recognised_and_its_notebook_tool_is_not():
