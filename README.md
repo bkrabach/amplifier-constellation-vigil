@@ -199,7 +199,7 @@ What this grants, and what it does not:
 - **With `"gh"` the credential is your own** and reaches everything you can reach, so the repository list and the read-only tools are the whole limit. A token or an App that GitHub itself restricts to those repositories limits it twice.
 - **The credential stays inside Vigil**, in memory, for a few minutes at a time. It is not handed to the engine, written into the home, logged, or shown to the model.
 - **Issues and pull requests are other people's text.** The tools say so to the model. An agent with these tools reads strangers' words.
-- **A session with a game connector does not get the tools** (`not_with = ["minecraft"]` by default, matched against the start of the session's tool-server names). Such a session already carries most of the tools an engine allows in one session.
+- **A session with a game connector does not get the tools** (`not_with = ["minecraft"]` by default: the names of experience tool servers whose sessions are left out). Such a session already carries most of the tools an engine allows in one session.
 
 Switching this on adds five tools to each session's list, so every long conversation sends its whole history once afterwards, as after any change to the tools. The App identity is tested against a stand-in for GitHub; it has not yet been run against a real App.
 

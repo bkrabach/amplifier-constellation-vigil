@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import socket
 import sys
 import time
@@ -183,6 +184,41 @@ def test_a_restart_waits_for_a_running_turn(run):
         assert result["stopReason"] == "end_turn" and client.text().endswith("done")
         assert daemon.store.one("SELECT status FROM events ORDER BY id DESC LIMIT 1")["status"] == "done"
     run(scenario)
+
+
+def test_a_turn_that_arrives_during_a_restart_waits_for_the_daemon(tmp_path):
+    """On a live agent a Slack turn arrived 3 seconds into a 3.6-second restart. The
+    bridge gave up after half a second and ran the engine alone: the turn had no
+    memory, was never journaled, and saw a tool list without the mind's tools."""
+    from vigil import shim
+
+    async def body():
+        config = make_home(tmp_path, free_port())
+        bridge = await asyncio.create_subprocess_exec(
+            sys.executable, "-c", "import sys; from vigil.shim import main; main(sys.argv[1])", str(config.home),
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, env={**os.environ, "VIGIL_ATTACH_WAIT": "10"})
+        await asyncio.sleep(1.5)  # the prompt is here; the daemon is not, yet
+        daemon = Daemon(config)
+        task = asyncio.create_task(daemon.run())
+        try:
+            conn = Connection(lambda *a: None, bridge.stdin, bridge.stdout)
+            init = await asyncio.wait_for(conn.send_request("initialize", {"protocolVersion": 1, "clientCapabilities": {}}), 30)
+            assert init["_meta"]["dev.vigil"]["mind"] is True, "answered by the daemon, not by the engine alone"
+            log = (config.home / "logs" / "shim.log").read_text()
+            assert "running the main runtime directly" not in log and "for the daemon, then attached" in log
+            await conn.close()
+        finally:
+            daemon._stop.set()
+            await task
+            if bridge.returncode is None:
+                bridge.kill()
+            await bridge.wait()
+
+    asyncio.run(body())
+    began = time.monotonic()
+    with pytest.raises(OSError):
+        shim._connect(str(tmp_path / "nothing" / "vigil.sock"), wait=0.3)
+    assert time.monotonic() - began < 1.5, "a daemon that is really down is given up on within the bound"
 
 
 def test_a_script_can_make_its_restart_wait_for_running_turns(run):

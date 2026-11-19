@@ -4,8 +4,9 @@ Every experience starts a short-lived ACP process (Slack and Conversations do it
 turn). The agent itself must not live in that process, so this bridge only joins its
 stdin/stdout to the always-on daemon's socket. It imports nothing heavy.
 
-If the daemon cannot be reached, the bridge runs the main runtime directly. The agent
-then still answers, without its mind, instead of going dark.
+If the daemon cannot be reached, the bridge waits a few seconds for it, as during a
+restart, and then runs the main runtime directly. The agent then still answers,
+without its mind, instead of going dark.
 """
 
 from __future__ import annotations
@@ -41,28 +42,44 @@ def _fallback(home: str, reason: str) -> None:
     os.execvpe(spec.command[0], spec.command, env)
 
 
-def _connect(path: str) -> socket.socket:
-    last: OSError | None = None
-    for delay in (0.0, 0.15, 0.4):  # ride out a daemon restart
-        if delay:
-            time.sleep(delay)
+#: How long a new attachment waits for a daemon that is not answering. A restart of the
+#: daemon takes a few seconds (3.6 on a live agent, with nothing to drain). A turn that
+#: arrived in that gap was answered by the engine alone: no memory, no mind tools, no
+#: journal entry, and a different tool list, which cost that conversation a compaction.
+#: Waiting is only ever paid while the daemon is down.
+ATTACH_WAIT = 12.0
+
+
+def _connect(path: str, wait: float | None = None) -> tuple[socket.socket, float]:
+    """The daemon's socket, and how long it took to answer."""
+    if wait is None:
+        try:
+            wait = float(os.environ.get("VIGIL_ATTACH_WAIT", ATTACH_WAIT))
+        except ValueError:
+            wait = ATTACH_WAIT
+    began, delay = time.monotonic(), 0.05
+    while True:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             sock.connect(path)
-            return sock
+            return sock, time.monotonic() - began
         except OSError as error:
             sock.close()
-            last = error
-    raise last or OSError("connect failed")
+            if time.monotonic() - began + delay > wait:
+                raise error
+        time.sleep(delay)
+        delay = min(0.4, delay * 2)
 
 
 def main(home: str) -> None:
     home = os.path.abspath(os.path.expanduser(home))
     try:
-        sock = _connect(os.path.join(home, "run", "vigil.sock"))
+        sock, waited = _connect(os.path.join(home, "run", "vigil.sock"))
     except OSError as error:
         _fallback(home, str(error))
         return
+    if waited >= 1.0:
+        _log(home, f"waited {waited:.1f}s for the daemon, then attached")
     hello = {"vigil": "attach", "pid": os.getpid(), "cwd": os.getcwd()}
     sock.sendall((json.dumps(hello) + "\n").encode())
 
