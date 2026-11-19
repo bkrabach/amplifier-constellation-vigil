@@ -21,7 +21,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from . import prompts
+from . import github, prompts
 from .config import Config
 
 REPOSITORY = "microsoft/amplifier-constellation-runtime"
@@ -244,6 +244,9 @@ def apply_settings(config: Config) -> dict[str, Any]:
     for extra in overrides.get("trusted_mcp_readonly_urls", []) or []:
         if extra not in trusted:
             trusted.append(extra)
+    # The GitHub tools are read-only and say so; trusting that endpoint lets the agent
+    # read without an approval each time. Switched off, the entry goes away again.
+    trusted = [entry for entry in trusted if entry != github.url(config)] + ([github.url(config)] if github.enabled(config) else [])
     settings["trusted_mcp_readonly_urls"] = trusted + [url]
     # Let people show the agent things: photos on a call, images and PDFs in a channel.
     native = dict(provider.get("native") or {})

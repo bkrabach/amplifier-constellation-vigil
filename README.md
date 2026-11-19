@@ -172,6 +172,37 @@ Run `vigil engine apply`, then restart when no turn is running. The list is the 
 
 What this grants: the provider fetches the page, not this machine, so the agent's commands stay without network. Anthropic's web fetch reads only addresses that already appear in the conversation, which keeps a page from steering the agent to an address of its own making; web search has no such limit and costs per search. Either way a page is something a stranger wrote, read by an agent that holds people's memories, so grant it for agents whose rooms you trust. Checked on the real provider with the pinned engine: a page read, a follow-up question in the same conversation, and a compaction with the page in the window. A fetched page stays in the conversation until the next compaction (about 60,000 characters at the limit above).
 
+### Reading GitHub
+
+The agent has no access to GitHub until you give it some. Vigil can serve it five read-only tools for the repositories you list: search issues and pull requests, read one with its comments, look inside a pull request (files, changes, checks, reviews), read a file or folder, and list what is recent.
+
+```toml
+[github]
+enabled = true
+identity = "gh"        # who the agent is on GitHub: "gh", "token" or "app"
+repos = ["your-org/project", "your-org/tools-*"]
+```
+
+| `identity` | The agent acts as | What you provide |
+| --- | --- | --- |
+| `"gh"` | The account logged in to the GitHub CLI, for the user that runs Vigil | Nothing more. Vigil asks `gh auth token` when it needs a token. |
+| `"token"` | Whoever the token belongs to, such as a bot account with a fine-grained token | The token, stored with `vigil secret github-token` |
+| `"app"` | A GitHub App installation | `app_id`, `installation_id`, and the App's private key as `secrets/github-app.pem`, readable only by you. Needs `openssl`. |
+
+Run `vigil engine apply`, restart when no turn is running, and check with `vigil github`. It shows the identity in use and whether GitHub accepts it, never the credential.
+
+What this grants, and what it does not:
+
+- **Only the listed repositories.** A name may end in `*`. Anything else is refused before GitHub is asked.
+- **A private repository is read only in a private conversation with you.** `private_places = ["slack:T123:C456"]` adds places, by the start of their place key (`vigil memory places` lists them). `private_repos = "never"` leaves private repositories out everywhere. A search or a listing in a shared room leaves them out without saying how many there are.
+- **Nothing is written.** There is no tool that comments, opens, merges or changes anything, whatever the identity could do.
+- **With `"gh"` the credential is your own** and reaches everything you can reach, so the repository list and the read-only tools are the whole limit. A token or an App that GitHub itself restricts to those repositories limits it twice.
+- **The credential stays inside Vigil**, in memory, for a few minutes at a time. It is not handed to the engine, written into the home, logged, or shown to the model.
+- **Issues and pull requests are other people's text.** The tools say so to the model. An agent with these tools reads strangers' words.
+- **A session with a game connector does not get the tools** (`not_with = ["minecraft"]` by default, matched against the start of the session's tool-server names). Such a session already carries most of the tools an engine allows in one session.
+
+Switching this on adds five tools to each session's list, so every long conversation sends its whole history once afterwards, as after any change to the tools. The App identity is tested against a stand-in for GitHub; it has not yet been run against a real App.
+
 ### A bridge from voice to the game
 
 ```toml

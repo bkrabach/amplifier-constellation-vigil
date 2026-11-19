@@ -17,6 +17,7 @@ Vigil is an always-on engine for a Constellation Agent Instance. Read [README.md
 | `src/vigil/decisions.py` | Decision backends and the questions Vigil asks. |
 | `src/vigil/prompts.py` | Standing instructions and per-model overlays. |
 | `src/vigil/engine.py` | Installing and configuring the native runtime. |
+| `src/vigil/github.py` | The agent's read access to GitHub: identity, the repository list, the audience rule, five tools. |
 | `src/vigil/daemon.py`, `cli.py`, `config.py`, `store.py`, `mcp.py` | Wiring, commands, configuration, SQLite, MCP over HTTP. |
 
 ## Rules that are easy to break
@@ -29,6 +30,7 @@ Vigil is an always-on engine for a Constellation Agent Instance. Read [README.md
 - **A wake-up must not be able to repeat itself.** Vigil brings the agent back to a conversation through the connector's follow-up tool (`WAKE_TOOLS` in `mind.py`). Three things keep that from looping: owner work the agent has seen is no reason to wake; a wake-up turn the agent ends without trying to speak settles what it surfaced; and a wake-up turn that left something undelivered is followed no sooner than five minutes later. A connector's refusal (`isError`) is never recorded as a wake-up set. Between turns, `tend_wakes` asks again only once a reminder is fifteen minutes overdue: asking sooner replaces one the connector is still waiting to admit. Check a connector's tool against its real server, on the Node version it runs: `tests/test_conductor.py` uses a stand-in.
 - **Holding wake-ups is an operator control, not a setting.** `vigil wake --hold` writes the `wake-hold` list in the state database, and `_wake_tool` reads it on every decision. Keep every path that sets a wake-up going through `_wake_tool`, or a hold will leak. It does not cover the model calling the connector's own reminder tool.
 - **A connector's credential stays in `secrets/`.** The tool-server descriptors Vigil keeps for waking a place (`secrets/wake-servers.json`, mode 0600) carry the connector's token. Never put a descriptor, its headers or its URL with credentials into `state.sqlite3`, the journal, an event, a log line or an error message: the database is copied for backups and for tests.
+- **GitHub's three rules live in `GitHub.may_read` and `GitHub.repositories`.** Every tool reaches a repository through one of them: it is on the owner's list, and a private one is read only where `private_ok` says. A new tool that builds its own address skips both. The tool definitions are fixed text with a pinned hash in `tests/test_github.py`: nothing from configuration goes into a description, because that would change every session's tool list. The credential is fetched and used inside `github.py` and goes nowhere else: not into an error, a log line, an event or a tool result. There is no write tool. Before adding one, decide who may cause a write (a stranger's text in an issue must not), and show with a test that a group conversation cannot.
 - **A reader must never raise.** An unfamiliar prompt yields a restrictive Scene, not an error.
 - **Keep the mind tool list stable.** Tools are part of a session's cached prefix. Add tools rarely, and give each at least one required argument.
 - **Automatic approval must not trust model text.** `_own_tool` in `mind.py` decides which permission requests Vigil approves by itself. A title is display text and raw arguments are often the model's own. Loosen that check only with a test in `tests/test_units.py` showing a forged request is still refused. An identity the engine states (`com.microsoft.amplifier.tool`) may only withdraw an approval: metadata is not proof because it is called metadata.
@@ -47,7 +49,9 @@ The product page (`site/`, published at <https://bkrabach.github.io/amplifier-co
 .venv/bin/python -m pytest
 ```
 
-`tests/test_conductor.py` runs the real daemon against `tests/fake_runtime.py` and checks ordering, permissions, replay and the quiet wake-up. `tests/drive.py` talks to a live daemon as an experience would, including through an Instance with `--command`. A passing suite shows mechanics; judge model behaviour with real turns.
+`tests/test_github.py` checks the GitHub tools against a stand-in for GitHub's API; `vigil github` and a real turn are the check against the real service. `tests/test_conductor.py` runs the real daemon against `tests/fake_runtime.py` and checks ordering, permissions, replay and the quiet wake-up. `tests/drive.py` talks to a live daemon as an experience would, including through an Instance with `--command`. A passing suite shows mechanics; judge model behaviour with real turns.
+
+A check "through Vigil" has to confirm that the daemon answered. A home whose path leaves no room for the socket (107 bytes on Linux) makes the daemon refuse to start, and `vigil acp` then runs the engine alone: a file-attachment check passed that way without Vigil in it. `_meta["dev.vigil"].mind` in the `initialize` reply is the daemon's mark, and `tests/runtime_matrix.py` now refuses to go on without it. Keep throwaway homes on a short path.
 
 ## Redeploying a live agent
 

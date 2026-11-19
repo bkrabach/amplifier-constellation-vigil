@@ -23,7 +23,7 @@ from typing import Any
 
 import aiohttp
 
-from . import bridges, brief, decisions, prompts, surfaces
+from . import bridges, brief, decisions, github, prompts, surfaces
 from .conductor import VIGIL_META, RuntimeProc
 from .mcp import ToolError, call_tool, list_tools
 from .memory import OWNER_WORK_CHARS, Memory, audience_fits, clip, owner_work_seen
@@ -344,6 +344,8 @@ class Mind:
         self.bridge = bridges.load(self.config)
         self._http: aiohttp.ClientSession | None = None
         self._task_lock = asyncio.Lock()
+        #: The agent's read access to GitHub, when its owner has switched it on.
+        self.github = github.GitHub(self.config, self.store, lambda: self.http) if github.enabled(self.config) else None
 
     @property
     def http(self) -> aiohttp.ClientSession:
@@ -368,11 +370,15 @@ class Mind:
         return caps.get("http") is True
 
     async def session_setup(self, link: Any, method: str, params: dict[str, Any]) -> Any:
-        client_servers = [s for s in params.get("mcpServers") or [] if isinstance(s, dict) and s.get("name") != MIND_SERVER]
+        client_servers = [s for s in params.get("mcpServers") or [] if isinstance(s, dict) and s.get("name") not in (MIND_SERVER, github.SERVER)]
         token = secrets.token_urlsafe(24)
         sid = params.get("sessionId")
         if self.supports_http_mcp(link.runtime):
             params["mcpServers"] = client_servers + [self.descriptor(token)]
+            if self.github is not None and github.offered(self.config, client_servers):
+                # Last, so that every other server keeps its place: the engine names a
+                # tool by its server's position in this list.
+                params["mcpServers"].append(self.github.descriptor(token))
             # The runtime discovers tools while it sets the session up, before a new
             # session has an id, so the token must be valid from this moment.
             self.tokens[token] = sid or ""
@@ -904,6 +910,13 @@ class Mind:
         return " That place could not be asked for a turn just now, so you will see it on the next message there after it is due."
 
     # ---- tools ---------------------------------------------------------------------
+    async def github_call(self, token: str, name: str, args: dict[str, Any]) -> Any:
+        sid = self.tokens.get(token)
+        scene = self.scenes.get(sid or "")
+        if not sid or scene is None or self.github is None:
+            raise ToolError("There is no active turn for this session.")
+        return await self.github.call(scene, name, args)
+
     async def call(self, token: str, name: str, args: dict[str, Any]) -> Any:
         sid = self.tokens.get(token)
         scene = self.scenes.get(sid or "")

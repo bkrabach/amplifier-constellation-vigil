@@ -23,6 +23,7 @@ from .brief import local_now
 from .conductor import STREAM_LIMIT, FrontLink
 from .config import Config, ensure_layout, socket_path_problem
 from .decisions import Decider
+from . import github
 from .mcp import McpServer
 from .memory import Memory
 from .mind import MIND_INSTRUCTIONS, TOOLS, Mind
@@ -163,6 +164,13 @@ class Daemon:
         app = web.Application(client_max_size=4 * 1024 * 1024)
         mcp = McpServer(TOOLS, self.mind.valid_token, self.mind.call, MIND_INSTRUCTIONS)
         app.add_routes(mcp.routes())
+        if self.mind.github is not None:
+            for problem in github.problems(self.config):
+                log.warning("%s", problem)
+            # The session token says which conversation a call comes from. Using it here
+            # is not evidence that the runtime opened the mind's own tools.
+            app.add_routes(McpServer(github.TOOLS, lambda token: token in self.mind.tokens, self.mind.github_call, github.INSTRUCTIONS,
+                                     path=github.PATH, name=github.SERVER, title="GitHub, read only").routes())
         app.add_routes([web.get("/control/status", self._status), web.post("/control/dream", self._dream)])
         runner = web.AppRunner(app, access_log=None)
         await runner.setup()
