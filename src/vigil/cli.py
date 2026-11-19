@@ -186,6 +186,41 @@ def cmd_wake(args: argparse.Namespace) -> None:
         print("While a hold lasts Vigil asks no connector to bring the agent back there. What it holds for the place stays in its brief.")
 
 
+def cmd_github(args: argparse.Namespace) -> None:
+    """Show which GitHub identity the agent uses and whether GitHub accepts it. Reads
+    one fact from GitHub. Never prints a credential."""
+    import asyncio
+
+    import aiohttp
+
+    from . import github
+    from .config import Config
+
+    config = Config.load(args.home)
+    if not github.enabled(config):
+        print("GitHub is off for this agent. Add a [github] table with enabled = true, identity and repos to vigil.toml.")
+        return
+    issues = github.problems(config)
+
+    async def look() -> dict:
+        async with aiohttp.ClientSession() as http:
+            return await github.GitHub(config, None, lambda: http).check()
+
+    report = {"problems": issues, **(asyncio.run(look()) if not issues else {})}
+    if args.json:
+        print(json.dumps(report))
+    else:
+        for issue in issues:
+            print(issue)
+        if not issues:
+            print(f"Identity: {report['identity']} ({report.get('acts_as', 'not accepted')})")
+            print("Repositories the agent may read: " + ", ".join(report["repositories"]))
+            print("GitHub accepts it." if report["accepted"] else "GitHub does not accept it: " + report.get("problem", ""))
+            print("A change to [github] takes effect after 'vigil engine apply' and a restart when no turn is running.")
+    if issues or not report.get("accepted"):
+        sys.exit(1)
+
+
 def cmd_status(args: argparse.Namespace) -> None:
     import time
 
@@ -366,6 +401,10 @@ def main() -> None:
     p.add_argument("--release", action="append", metavar="PLACE", help="end a hold; repeatable")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_wake)
+
+    p = sub.add_parser("github", help="show the agent's GitHub identity and whether GitHub accepts it")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_github)
 
     p = sub.add_parser("dream", help="run the consolidation pass now")
     p.set_defaults(func=lambda a: print(json.dumps(_control(a, "/control/dream", "POST"))))

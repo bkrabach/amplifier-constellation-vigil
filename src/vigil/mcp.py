@@ -39,14 +39,16 @@ def _rpc(request_id: Any, result: Any = None, error: tuple[int, str] | None = No
 
 
 class McpServer:
-    def __init__(self, tools: list[dict[str, Any]], authorize: Callable[[str], bool], call: ToolCaller, instructions: str = ""):
+    def __init__(self, tools: list[dict[str, Any]], authorize: Callable[[str], bool], call: ToolCaller, instructions: str = "",
+                 path: str = "/mcp", name: str = "mind", title: str = "Vigil mind"):
         self.tools = tools
         self.authorize = authorize
         self.call = call
         self.instructions = instructions
+        self.path, self.name, self.title = path, name, title
 
     def routes(self) -> list[web.RouteDef]:
-        return [web.post("/mcp", self.handle), web.get("/mcp", self.no_stream), web.delete("/mcp", self.no_stream)]
+        return [web.post(self.path, self.handle), web.get(self.path, self.no_stream), web.delete(self.path, self.no_stream)]
 
     async def no_stream(self, request: web.Request) -> web.Response:
         if TRACE:
@@ -83,7 +85,7 @@ class McpServer:
             return _rpc(request_id, {
                 "protocolVersion": wanted if wanted in PROTOCOLS else PROTOCOLS[1],
                 "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": {"name": "mind", "title": "Vigil mind", "version": __version__},
+                "serverInfo": {"name": self.name, "title": self.title, "version": __version__},
                 "instructions": self.instructions,
             })
         if method == "ping":

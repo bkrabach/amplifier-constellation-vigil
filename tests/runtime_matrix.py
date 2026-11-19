@@ -107,6 +107,10 @@ class Client:
                                                          stdout=asyncio.subprocess.PIPE, limit=32 * 1024 * 1024)
         self.conn = Connection(self._handler, self.proc.stdin, self.proc.stdout)
         self.init = await asyncio.wait_for(self.conn.send_request("initialize", {"protocolVersion": 1, "clientInfo": {"name": "matrix", "version": "0"}, "clientCapabilities": {}}), 90)
+        if not ((self.init.get("_meta") or {}).get("dev.vigil") or {}).get("mind"):
+            # With no daemon the bridge runs the engine alone, and everything after this
+            # would be a check of the engine, not of Vigil.
+            raise RuntimeError(f"The Vigil daemon for {self.home} did not answer; `vigil acp` ran the engine alone. Is the home's path short enough for its socket?")
 
     async def prompt(self, sid: str, text: str) -> tuple[str, str]:
         self.text = ""

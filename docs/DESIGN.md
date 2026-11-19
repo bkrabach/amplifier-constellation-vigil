@@ -133,9 +133,23 @@ Other guidance is applied in the harness instead of in text: effort is set throu
 - **Decision backend down:** rules take over.
 - **Task interrupted by a restart:** it is queued again from the start, since its session is the daemon's own.
 
+## GitHub
+
+An agent that helps with work tracked on GitHub has to read it. Vigil serves the read tools itself (`github.py`) instead of attaching a hosted GitHub tool server to each session, for reasons that all come from running a live agent:
+
+- **The tool list has to hold still.** The engine keeps a conversation's compacted history for one exact tool list. Tools whose definitions change on another service's schedule, or that disappear when that service is unreachable, cost every long conversation its history each time. Vigil's five definitions are fixed text, a test pins their hash, and nothing from configuration appears in them. When GitHub is down a call fails; the list does not change.
+- **The credential stays in one place.** A server descriptor handed to the engine is kept wherever the engine keeps sessions. Here the session is given Vigil's own per-session token, as for the mind's tools, and GitHub's credential never leaves the module that calls GitHub.
+- **Only Vigil knows who is in the room.** Each call arrives with the session's token, so the same audience rule that governs memory decides whether a private repository may be read there. A model's judgment is not part of that decision.
+
+Three rules are applied in code on every call: the repository is on the owner's list; a private repository is read only where the owner allows; nothing is written. A search names to GitHub only the repositories the conversation may read, and what comes back is checked against the list again.
+
+Who the agent is on GitHub is the owner's choice of three: the account logged in to the GitHub CLI on the host, a stored token, or a GitHub App installation. The first makes the agent act with a person's own access, which is why the list and the absence of write tools are enforced by Vigil and not left to the credential.
+
+Writing (a comment, an issue, a review) is not built. When it is, the question is not only what the credential allows but who asked: text in an issue is written by strangers, and an agent that both reads it and can write must not take instructions from it.
+
 ## Boundaries Vigil keeps
 
-- It reads no other component's files and uses no other component's credentials. It calls an experience's tool only through the descriptor that experience handed to the session.
+- It reads no other component's files and uses no other component's credentials. It calls an experience's tool only through the descriptor that experience handed to the session. The one credential from outside its home that it will ask for is the GitHub CLI's, and only when the owner has named that as the agent's GitHub identity.
 - It advertises only what the runtime negotiated, plus its own identity. It removes the native history profile, because an Instance uses that to run the engine binary against its store, and Vigil is not that binary.
 - It approves permission requests only for its own tools. Everything else goes to the client, so each experience's approval policy stands. Because that approval is automatic, it never rests on text a model controls: Vigil accepts the native runtime's exact `{server, tool, arguments}` envelope, or a request whose title is the whole identifier of a mind tool, whose kind is the one harnesses give MCP tools, and whose raw arguments are all parameters of that tool. A shell command that begins with a tool's name, or another tool that carries `server: "mind"` among its arguments, gets no approval from Vigil. When the engine states the call's identity itself (the native engine does from 0.15.8, as `com.microsoft.amplifier.tool`), that statement must name the same mind tool; it can withdraw an approval and never grants one.
 - It does not pass on a request that imitates a tool identity. A runtime names a connector's tool to the client with an envelope of exactly `{server, tool, arguments}`. A request whose own arguments carry both a `server` and a `tool` in any other shape is cancelled and logged, because a client that decided from those keys would approve it. The native engine refuses such a built-in call itself from 0.15.8; this covers older engines and runtimes that send a tool's own arguments as the raw input. The cost: with those runtimes, a connector tool that takes both a `server` and a `tool` parameter is cancelled too.
