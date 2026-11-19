@@ -47,6 +47,7 @@ class Hub:
         self.comments = [{"user": {"login": "wren"}, "created_at": "2026-01-01T00:00:00Z", "body": "first"}]
         self.exchanges: list[str] = []
         self.queries: list[str] = []
+        self.repositories = ("acme/Open", "acme/secret", "acme/unrelated")
 
     async def handle(self, request: web.Request) -> web.Response:
         path, auth = request.path, request.headers.get("Authorization", "")
@@ -79,7 +80,7 @@ class Hub:
             self.queries.append(request.query["q"])
             if "op in:name" not in request.query["q"] and "se in:name" not in request.query["q"] and " in:name" in request.query["q"]:
                 return web.json_response({"items": []})
-            return web.json_response({"items": [{"full_name": name, "private": name.lower() in self.private} for name in ("acme/Open", "acme/secret", "acme/unrelated")]})
+            return web.json_response({"items": [{"full_name": name, "private": name.lower() in self.private} for name in self.repositories]})
         if parts[0] == "repos" and len(parts) >= 3:
             repo, rest = f"{parts[1]}/{parts[2]}", parts[3:]
             if parts[1] != "acme":
@@ -176,6 +177,27 @@ def test_a_search_in_a_shared_room_leaves_out_private_and_unlisted_repositories(
         assert [hit["repo"] for hit in owner["results"]] == ["acme/open", "acme/secret"] and "note" not in owner
         listed = json.loads(await hubgit.call(ROOM, "github_list", {"what": "repositories"}))
         assert listed["repositories"] == [{"repo": "acme/open", "private": False}, {"repo": "acme/unrelated", "private": False}]
+    go(body)
+
+
+def test_a_starred_name_never_takes_in_a_security_advisorys_private_copy(tmp_path):
+    """The starred name for a project on a live agent matched the private copy GitHub
+    had made for a security advisory on one of its repositories."""
+    async def body(hub, http):
+        copy = "acme/open-ghsa-hwpm-3vcg-6926"
+        hub.private.add(copy)
+        hub.repositories = ("acme/Open", "acme/secret", copy)
+        hubgit, config, _ = client(tmp_path, hub, http)
+        assert "not one of the repositories" in await refused(hubgit.call(OWNER, "github_issue", {"repo": copy, "number": 1}))
+        listed = json.loads(await hubgit.call(OWNER, "github_list", {"what": "repositories"}))
+        assert [r["repo"] for r in listed["repositories"]] == ["acme/open", "acme/secret"]
+        await hubgit.call(OWNER, "github_search", {"query": "one"})
+        assert copy not in hub.queries[-1]
+        assert not any(copy in path for path in hub.asked("/repos/")), "nothing was asked of GitHub about the copy"
+        # Named in full, it is the owner's decision.
+        rewrite(config, lambda text: text.replace('repos = ["acme/*"]', f'repos = ["acme/*", "{copy}"]'))
+        assert json.loads(await hubgit.call(OWNER, "github_issue", {"repo": copy, "number": 1}))["title"] == "An issue"
+        assert "private" in await refused(hubgit.call(ROOM, "github_issue", {"repo": copy, "number": 1}))
     go(body)
 
 

@@ -193,7 +193,7 @@ Run `vigil engine apply`, restart when no turn is running, and check with `vigil
 
 What this grants, and what it does not:
 
-- **Only the listed repositories.** A name may end in `*`. Anything else is refused before GitHub is asked.
+- **Only the listed repositories.** A name may end in `*`. Anything else is refused before GitHub is asked. A starred name never takes in the private copy GitHub makes for a security advisory (`name-ghsa-xxxx-xxxx-xxxx`); to list one, name it in full.
 - **A private repository is read only in a private conversation with you**, unless you open a place to it: `private_places = [{ place = "slack:T123:C456", repos = ["your-org/project", "your-org/project-*"] }]`. A place is named by the start of its place key (`vigil memory places` lists them), and only the repositories named for it are opened there. Name them: a list with a star can match a private repository you never meant for a room, such as a security advisory's private copy. (A bare place key in that list opens every listed private repository there.) `private_repos = "never"` leaves private repositories out everywhere. A search or a listing in a shared room leaves out what is not opened to it, without saying how many there are. Everyone in an opened place, people and agents, sees whatever the agent quotes.
 - **Nothing is written.** There is no tool that comments, opens, merges or changes anything, whatever the identity could do.
 - **With `"gh"` the credential is your own** and reaches everything you can reach, so the repository list and the read-only tools are the whole limit. A token or an App that GitHub itself restricts to those repositories limits it twice.
