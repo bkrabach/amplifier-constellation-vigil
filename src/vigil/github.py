@@ -117,9 +117,11 @@ def offered(config: Config, client_servers: list[dict[str, Any]]) -> bool:
     session already carries most of the tools an engine allows in one session."""
     if not enabled(config):
         return False
-    skip = settings(config).get("not_with", ["minecraft"])
-    names = [str(server.get("name", "")) for server in client_servers]
-    return not any(name.startswith(str(prefix)) for name in names for prefix in skip or [])
+    skip = {str(name) for name in settings(config).get("not_with", ["minecraft"]) or []}
+    # By the whole name. A Slack session can carry a server called "minecraft-presence",
+    # which shows the agent's game self to other places; matching the start of a name
+    # took that for the game and left every such session without these tools.
+    return not any(str(server.get("name", "")) in skip for server in client_servers)
 
 
 def problems(config: Config) -> list[str]:

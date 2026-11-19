@@ -379,11 +379,14 @@ def test_a_session_gets_the_tools_after_the_minds_and_a_game_session_does_not(ru
         user = Client()
         await user.attach(config)
         chat = {"type": "http", "name": "slack-context", "url": "http://127.0.0.1:9/mcp", "headers": []}
+        # A place other than the game can carry the game's presence tools. A live agent's
+        # Slack sessions do, and were left without GitHub while names were matched by their start.
+        presence = {"type": "http", "name": "minecraft-presence", "url": "http://127.0.0.1:9/presence/mcp", "headers": []}
         forged = {"type": "http", "name": "github", "url": "http://127.0.0.1:9/elsewhere", "headers": []}
-        room = (await user.conn.send_request("session/new", {"cwd": config.workspace, "mcpServers": [chat, forged]}))["sessionId"]
+        room = (await user.conn.send_request("session/new", {"cwd": config.workspace, "mcpServers": [chat, presence, forged]}))["sessionId"]
         game = (await user.conn.send_request("session/new", {"cwd": config.workspace, "mcpServers": [{"type": "http", "name": "minecraft", "url": "http://127.0.0.1:9/mcp", "headers": []}]}))["sessionId"]
         state = json.loads((config.home / "fake-state.json").read_text())
-        assert state[room]["mcp"] == ["slack-context", "mind", "github"], "a client cannot supply its own server under that name"
+        assert state[room]["mcp"] == ["slack-context", "minecraft-presence", "mind", "github"], "a client cannot supply its own server under that name"
         assert state[game]["mcp"] == ["minecraft", "mind"]
 
         token = next(token for token, session in daemon.mind.tokens.items() if session == room)
