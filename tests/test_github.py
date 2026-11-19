@@ -79,7 +79,7 @@ class Hub:
             self.queries.append(request.query["q"])
             if "op in:name" not in request.query["q"] and "se in:name" not in request.query["q"] and " in:name" in request.query["q"]:
                 return web.json_response({"items": []})
-            return web.json_response({"items": [{"full_name": "acme/Open", "private": False}, {"full_name": "acme/secret", "private": True}, {"full_name": "acme/unrelated", "private": False}]})
+            return web.json_response({"items": [{"full_name": name, "private": name.lower() in self.private} for name in ("acme/Open", "acme/secret", "acme/unrelated")]})
         if parts[0] == "repos" and len(parts) >= 3:
             repo, rest = f"{parts[1]}/{parts[2]}", parts[3:]
             if parts[1] != "acme":
@@ -201,6 +201,54 @@ def test_the_owner_can_name_a_place_for_private_repositories_or_forbid_them_ever
         assert "private" in await refused(never.call(OWNER, "github_issue", {"repo": "acme/secret", "number": 2}))
     (tmp_path / "a").mkdir()
     (tmp_path / "b").mkdir()
+    go(body)
+
+
+def rewrite(config: Config, change) -> None:
+    """Edit the home's vigil.toml as an owner would, and make sure its time moves on."""
+    path = config.home / "vigil.toml"
+    before = path.stat().st_mtime_ns
+    path.write_text(change(path.read_text()))
+    os.utime(path, ns=(before + 2_000_000_000, before + 2_000_000_000))
+
+
+def test_a_place_is_opened_for_the_private_repositories_named_for_it_and_no_others(tmp_path):
+    """A list with a star can match a private repository its owner never meant for a
+    room. On a live agent the list for a project also matched a security advisory's
+    private copy, so opening a channel to "private repositories" would have opened that."""
+    async def body(hub, http):
+        hubgit, config, _ = client(tmp_path, hub, http)
+        hub.private.add("acme/unrelated")
+        rewrite(config, lambda text: text + 'private_places = [{ place = "slack:T1:C1", repos = ["acme/sec*"] }]\n')
+        assert json.loads(await hubgit.call(ROOM, "github_issue", {"repo": "acme/secret", "number": 2}))["title"] == "An issue"
+        said = await refused(hubgit.call(ROOM, "github_issue", {"repo": "acme/unrelated", "number": 2}))
+        assert "private" in said and "Nothing from it was fetched" in said
+        listed = json.loads(await hubgit.call(ROOM, "github_list", {"what": "repositories"}))
+        assert [r["repo"] for r in listed["repositories"]] == ["acme/open", "acme/secret"] and "left out" in listed["note"]
+        elsewhere = Scene(session="s", surface="slack", place="slack:T1:C2", audience="group")
+        assert "private" in await refused(hubgit.call(elsewhere, "github_issue", {"repo": "acme/secret", "number": 2}))
+        assert json.loads(await hubgit.call(OWNER, "github_issue", {"repo": "acme/unrelated", "number": 2}))["title"] == "An issue"
+        assert github.problems(config.load(config.home)) == []
+        rewrite(config, lambda text: text.replace('repos = ["acme/sec*"] }]', 'repos = [] }]'))
+        assert any("private_places takes" in problem for problem in github.problems(Config.load(config.home)))
+    go(body)
+
+
+def test_a_changed_table_is_taken_up_without_a_restart(tmp_path):
+    async def body(hub, http):
+        hubgit, config, _ = client(tmp_path, hub, http, repos=["acme/open"])
+        assert "not one of the repositories" in await refused(hubgit.call(OWNER, "github_issue", {"repo": "acme/secret", "number": 2}))
+        rewrite(config, lambda text: text.replace('repos = ["acme/open"]', 'repos = ["acme/open", "acme/secret"]'))
+        assert json.loads(await hubgit.call(OWNER, "github_issue", {"repo": "acme/secret", "number": 2}))["title"] == "An issue"
+        # Half an edit: the table that was in force stays in force.
+        whole = (config.home / "vigil.toml").read_text()
+        rewrite(config, lambda text: text + "\n[github\nrepos = [")
+        assert json.loads(await hubgit.call(OWNER, "github_issue", {"repo": "acme/secret", "number": 2}))["title"] == "An issue"
+        rewrite(config, lambda text: whole.replace('repos = ["acme/open", "acme/secret"]', 'repos = ["acme/open"]'))
+        assert "not one of the repositories" in await refused(hubgit.call(OWNER, "github_issue", {"repo": "acme/secret", "number": 2}))
+        # Switched off in the file: the tools stay in the session's list and say so.
+        rewrite(config, lambda text: text.replace("enabled = true", "enabled = false"))
+        assert "switched GitHub access off" in await refused(hubgit.call(OWNER, "github_issue", {"repo": "acme/open", "number": 1}))
     go(body)
 
 

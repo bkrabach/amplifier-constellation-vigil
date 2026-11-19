@@ -189,12 +189,12 @@ repos = ["your-org/project", "your-org/tools-*"]
 | `"token"` | Whoever the token belongs to, such as a bot account with a fine-grained token | The token, stored with `vigil secret github-token` |
 | `"app"` | A GitHub App installation | `app_id`, `installation_id`, and the App's private key as `secrets/github-app.pem`, readable only by you. Needs `openssl`. |
 
-Run `vigil engine apply`, restart when no turn is running, and check with `vigil github`. It shows the identity in use and whether GitHub accepts it, never the credential.
+Run `vigil engine apply`, restart when no turn is running, and check with `vigil github`. It shows the identity in use and whether GitHub accepts it, never the credential. After that first time, a change to the repository list, to where private repositories may be read, or to the identity is taken up from `vigil.toml` on the agent's next GitHub call, with no restart. Switching `enabled` on or off still needs one.
 
 What this grants, and what it does not:
 
 - **Only the listed repositories.** A name may end in `*`. Anything else is refused before GitHub is asked.
-- **A private repository is read only in a private conversation with you.** `private_places = ["slack:T123:C456"]` adds places, by the start of their place key (`vigil memory places` lists them). `private_repos = "never"` leaves private repositories out everywhere. A search or a listing in a shared room leaves them out without saying how many there are.
+- **A private repository is read only in a private conversation with you**, unless you open a place to it: `private_places = [{ place = "slack:T123:C456", repos = ["your-org/project", "your-org/project-*"] }]`. A place is named by the start of its place key (`vigil memory places` lists them), and only the repositories named for it are opened there. Name them: a list with a star can match a private repository you never meant for a room, such as a security advisory's private copy. (A bare place key in that list opens every listed private repository there.) `private_repos = "never"` leaves private repositories out everywhere. A search or a listing in a shared room leaves out what is not opened to it, without saying how many there are. Everyone in an opened place, people and agents, sees whatever the agent quotes.
 - **Nothing is written.** There is no tool that comments, opens, merges or changes anything, whatever the identity could do.
 - **With `"gh"` the credential is your own** and reaches everything you can reach, so the repository list and the read-only tools are the whole limit. A token or an App that GitHub itself restricts to those repositories limits it twice.
 - **The credential stays inside Vigil**, in memory, for a few minutes at a time. It is not handed to the engine, written into the home, logged, or shown to the model.
