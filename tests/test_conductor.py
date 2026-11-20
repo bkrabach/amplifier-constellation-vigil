@@ -723,7 +723,7 @@ def test_a_restart_does_not_leave_held_work_waiting_for_someone_to_speak(tmp_pat
             shown = io.StringIO()
             with contextlib.redirect_stdout(shown):
                 await asyncio.to_thread(cmd_status, argparse.Namespace(home=str(config.home), json=False, wait_idle=None))
-            assert "warning: the Minecraft world has not let a wake-up be set since" in shown.getvalue() and "(1 tries): Follow-up unavailable: explicit_stop" in shown.getvalue()
+            assert "warning: the Minecraft world has not let a wake-up be set since" in shown.getvalue() and "(1 try): Follow-up unavailable: explicit_stop" in shown.getvalue()
             # While the answer stays no it is asked less and less often: 5, 10, 20, then 30 minutes.
             waits = []
             for _ in range(5):
