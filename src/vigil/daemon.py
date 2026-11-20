@@ -15,6 +15,7 @@ import logging.handlers
 import os
 import signal
 import time
+from typing import Any
 
 from aiohttp import web
 
@@ -26,7 +27,7 @@ from .decisions import Decider
 from . import github
 from .mcp import McpServer
 from .memory import Memory
-from .mind import MIND_INSTRUCTIONS, TOOLS, Mind
+from .mind import MIND_INSTRUCTIONS, TOOLS, WAKE_REFUSED, Mind
 from .store import Store, now
 
 log = logging.getLogger("vigil")
@@ -104,7 +105,24 @@ class Daemon:
             "decisions_24h": {"count": decided["n"], "ok": decided["ok"] or 0, "avg_ms": round(decided["ms"] or 0), "by_purpose": by_purpose,
                               "backends": [b.name for b in self.decider.backends]},
             "last_dream": store.meta_get("last_dream"),
+            "wake_refusals": self._wake_refusals(),
         })
+
+    def _wake_refusals(self) -> list[dict[str, Any]]:
+        """Places whose connector will not set a wake-up: what the agent holds for them
+        waits until someone speaks there. A place can go quiet for a reason that is
+        settled in front of Vigil, where no turn of its own ever fails."""
+        refusals = []
+        for row in self.store.q("SELECT key, value FROM meta WHERE key LIKE ?", (WAKE_REFUSED + "%",)):
+            try:
+                record = json.loads(row["value"])
+            except ValueError:
+                continue
+            place = row["key"][len(WAKE_REFUSED):]
+            label = self.store.one("SELECT place_label FROM journal WHERE place=? AND place_label!='' ORDER BY id DESC LIMIT 1", (place,))
+            refusals.append({"place": label["place_label"] if label else place, "since": record.get("since"), "last": record.get("last"),
+                             "count": record.get("count"), "reason": record.get("reason")})
+        return refusals
 
     async def _dream(self, request: web.Request) -> web.Response:
         if not self._authorized(request):

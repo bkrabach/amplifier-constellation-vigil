@@ -1111,3 +1111,14 @@ def test_a_hold_names_a_surface_or_the_start_of_a_place(memory: Memory):
     for unreadable in ("not json", json.dumps([None, "", 7])):
         memory.store.meta_set(WAKE_HOLD, unreadable)
         assert not wake_held(memory.store, game)  # a damaged list holds nothing rather than everything
+
+
+def test_a_refusal_is_kept_in_the_connectors_own_words():
+    """The game connector on a live agent wraps its refusal in a JSON object inside a text
+    part; the stand-in in the daemon tests answers in plain text. Both read the same."""
+    from vigil.mind import refusal_words
+
+    live = {"content": [{"type": "text", "text": "{\"error\":\"Follow-up unavailable: unresolved_activity_effects\"}"}], "isError": True}
+    assert refusal_words(live) == "Follow-up unavailable: unresolved_activity_effects"
+    assert refusal_words({"content": [{"type": "text", "text": "Follow-up unavailable: explicit_stop"}], "isError": True}) == "Follow-up unavailable: explicit_stop"
+    assert refusal_words({"isError": True}) == "refused" and len(refusal_words({"content": [{"type": "text", "text": "x" * 900}]})) == 160
