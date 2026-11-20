@@ -220,6 +220,33 @@ WAKE_GRACE = 900.0
 #: prefixes. It is read on every decision, so `vigil wake --hold` and `--release` take
 #: effect on a running daemon without a restart.
 WAKE_HOLD = "wake-hold"
+#: What is kept about a place whose connector will not set a wake-up: since when, how
+#: many times in a row, and what it answered. `vigil status` shows it, because nothing
+#: else does. On a live agent a game refused every wake-up for 28 hours, after a turn
+#: rejected before it reached Vigil left effects unsettled there, and only a log line
+#: repeated every five minutes said so.
+WAKE_REFUSED = "wake-refused:"
+
+
+class WakeRefused(RuntimeError):
+    """The connector answered, and the answer was no. Its words are the message."""
+
+
+def refusal_words(result: dict[str, Any]) -> str:
+    """What a connector said when it refused a tool call, without the wrapping."""
+    words = []
+    for part in result.get("content") or []:
+        text = part.get("text") if isinstance(part, dict) else None
+        if not isinstance(text, str):
+            continue
+        try:
+            inner = json.loads(text)
+            text = str(inner.get("error") or text) if isinstance(inner, dict) else text
+        except ValueError:
+            pass
+        words.append(text)
+    structured = result.get("structuredContent")
+    return clip(" ".join(words) or (json.dumps(structured) if structured else "refused"), 160)
 
 
 def wake_held(store: Any, scene: Scene) -> bool:
@@ -840,6 +867,8 @@ class Mind:
         wait = self._next_wake(scene)
         if wait is None or wait > float(self.config.mind("followup_chain_horizon_hours", 24)) * 3600:
             self.quiet_hops.pop(scene.place, None)
+            if wait is None:
+                self._wake_refused(scene.place, None)  # nothing is owed there, so nothing is being refused
             return False
         after = int(min(3600, max(5, wait + 2)))
         if turn is None and not outside:
@@ -875,17 +904,42 @@ class Mind:
             if result.get("isError"):
                 # A refusal is an answer (the conversation is stopped, or has effects
                 # to settle): nothing is set, and recording it as set would hide that.
-                raise RuntimeError("refused: " + clip(json.dumps(result.get("content") or result.get("structuredContent") or ""), 160))
+                raise WakeRefused(refusal_words(result))
             self.store.meta_set(key, str(fire_at))
+            self._wake_refused(scene.place, None)
             return True
         except Exception as error:
-            log.info("wake not armed for %s: %s", scene.place, error)
+            # Only a refusal's own words are kept. A transport error can name the
+            # connector's address, and the record is in the state database.
+            http = re.search(r"HTTP \d{3}", str(error))
+            reason = str(error) if isinstance(error, WakeRefused) else f"the connector answered {http.group(0)}" if http else f"the connector could not be reached ({type(error).__name__})"
+            count = self._wake_refused(scene.place, reason)
+            log.info("wake not armed for %s (%d in a row): %s", scene.place, count, error)
             if "HTTP 401" in str(error) or "HTTP 403" in str(error):
                 self._forget_wake(scene.place)  # the connector's credential changed; the next turn there brings the new one
             elif tending:
-                # A refusal or an unreachable connector: look again after a while, not on every pass.
-                self.store.meta_set(key, str(now() - WAKE_GRACE + 300))
+                # A refusal or an unreachable connector: look again after a while, not on
+                # every pass, and less often while the answer stays the same. Half an hour
+                # at most, so a place that has been repaired is asked again soon.
+                self.store.meta_set(key, str(now() - WAKE_GRACE + min(1800, 300 * 2 ** min(count - 1, 6))))
             return False
+
+    def _wake_refused(self, place: str, reason: str | None) -> int:
+        """Keep the record that a place's connector will not set a wake-up, or with no
+        reason drop it. Returns how many times in a row it has not."""
+        key = WAKE_REFUSED + place
+        kept = self.store.meta_get(key)
+        if reason is None:
+            if kept is not None:
+                self.store.run("DELETE FROM meta WHERE key=?", (key,))
+            return 0
+        try:
+            record = json.loads(kept or "{}")
+        except ValueError:
+            record = {}
+        record = {"since": record.get("since") or now(), "count": int(record.get("count") or 0) + 1, "last": now(), "reason": reason}
+        self.store.meta_set(key, json.dumps(record))
+        return record["count"]
 
     async def tend_wakes(self) -> None:
         """Between turns: ask a place for a turn when something is owed there and no

@@ -220,7 +220,7 @@ The other direction, the agent noticing what happens in the world while you talk
 
 | Command | What it shows or does |
 | --- | --- |
-| `vigil status` | Uptime, attached connections, turns, memory size, follow-ups, tasks, decision latency. |
+| `vigil status` | Uptime, attached connections, turns, memory size, follow-ups, tasks, decision latency, and a warning for a place whose connector will not let a wake-up be set. |
 | `vigil memory notes` / `journal` / `agenda` / `decisions` | What the agent wrote down, what happened where, what it is holding, and what the decision models answered. |
 | `vigil memory places` / `vigil memory forget` | Where the agent has been, and a way to remove a practice run: `forget --place KEY-PREFIX [--since 2h] [--people]` counts what it would delete; add `--apply` to delete. |
 | `vigil people` | Who the agent knows and which accounts are linked. `vigil people confirm --surface S --handle H` accepts a pending identity claim. |

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
+import contextlib
+import io
 import json
 import os
 import socket
@@ -14,6 +17,7 @@ import pytest
 from acp.connection import Connection
 
 from vigil.brief import CLOSE, OPEN
+from vigil.cli import cmd_status
 from vigil.config import Config
 from vigil.daemon import Daemon
 from vigil.surfaces import Scene
@@ -710,17 +714,49 @@ def test_a_restart_does_not_leave_held_work_waiting_for_someone_to_speak(tmp_pat
             await mind.tend_wakes()
             await mind.tend_wakes()
             assert len(tools.calls) == 3
+            # And it is kept where an operator looks. On a live agent a game refused every
+            # wake-up for 28 hours and only a log line, repeated every five minutes, said so.
+            refused = f"wake-refused:{place}"
+            record = json.loads(daemon.store.meta_get(refused))
+            assert record["count"] == 1 and record["reason"] == "Follow-up unavailable: explicit_stop"
+            assert daemon._wake_refusals() == [{"place": "the Minecraft world", "since": record["since"], "last": record["last"], "count": 1, "reason": record["reason"]}]
+            shown = io.StringIO()
+            with contextlib.redirect_stdout(shown):
+                await asyncio.to_thread(cmd_status, argparse.Namespace(home=str(config.home), json=False, wait_idle=None))
+            assert "warning: the Minecraft world has not let a wake-up be set since" in shown.getvalue() and "(1 tries): Follow-up unavailable: explicit_stop" in shown.getvalue()
+            # While the answer stays no it is asked less and less often: 5, 10, 20, then 30 minutes.
+            waits = []
+            for _ in range(5):
+                waits.append(round(float(daemon.store.meta_get(key)) + 900 - time.time()))
+                daemon.store.meta_set(key, str(time.time() - 1000))
+                await mind.tend_wakes()
+            waits.append(round(float(daemon.store.meta_get(key)) + 900 - time.time()))
+            assert waits == [300, 600, 1200, 1800, 1800, 1800] and len(tools.calls) == 8
+            assert json.loads(daemon.store.meta_get(refused))["count"] == 6 and json.loads(daemon.store.meta_get(refused))["since"] == record["since"]
+            # The first time the connector agrees, the record is gone.
+            tools.refuse = False
+            daemon.store.meta_set(key, str(time.time() - 1000))
+            await mind.tend_wakes()
+            assert len(tools.calls) == 9 and daemon.store.meta_get(refused) is None and daemon._wake_refusals() == []
+            # Refused again, and then nothing is owed there any more: nothing is being refused either.
+            tools.refuse = True
+            daemon.store.meta_set(key, str(time.time() - 1000))
+            await mind.tend_wakes()
+            assert len(tools.calls) == 10 and json.loads(daemon.store.meta_get(refused))["count"] == 1
             tools.refuse = False
             # With nothing owed, nothing is asked.
             daemon.store.run("UPDATE thoughts SET state='cancelled'")
             daemon.store.meta_set(key, "0")
             await mind.tend_wakes()
-            assert len(tools.calls) == 3
+            assert len(tools.calls) == 10 and daemon.store.meta_get(refused) is None
             # A connector that no longer accepts the saved credential is forgotten, until a turn there brings the new one.
             daemon.memory.thought_add(Scene(session=sid, surface="minecraft", place=place, audience="group"), "followup", "Ask about the roof.", 0)
             tools.token = "rotated"
             await mind.tend_wakes()
-            assert json.loads(saved.read_text()) == {} and len(tools.calls) == 3
+            assert json.loads(saved.read_text()) == {} and len(tools.calls) == 10
+            # What is kept says what the connector answered, never where the connector is.
+            kept = daemon.store.meta_get(refused)
+            assert json.loads(kept)["reason"] == "the connector answered HTTP 401" and "127.0.0.1" not in kept and "rotated" not in kept and "game-token" not in kept
             await mind.tend_wakes()
             await client.close()
         finally:
