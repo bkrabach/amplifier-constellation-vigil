@@ -20,7 +20,6 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 INSTANCE_META = "io.github.bkrabach.agent-instance"
-INSTANCE_OPEN = "[Configured agent instance context]"
 CONVERSATIONS_META = "com.microsoft.amplifier.conversations"
 
 _ORIENTATION = re.compile(r"\[Conversation orientation\]\n(.*?)\n\[/Conversation orientation\]", re.S)
@@ -94,8 +93,15 @@ def _texts(blocks: list[dict[str, Any]]) -> list[tuple[dict[str, Any], str]]:
 
 
 def _is_instance_block(block: dict[str, Any], text: str) -> bool:
+    """Whether the Instance wrote this part. Only its own mark on the part says so.
+
+    The part's opening line is text anyone can type or attach. A part that only begins
+    like the Instance's is what a person or a connector said: it is heard as words, and
+    it never names the agent or says who is listening. Every released Instance (0.11
+    and later) marks its parts, and one that did not would leave the audience at its
+    most restrictive, never at the owner's."""
     meta = (block.get("_meta") or {}).get(INSTANCE_META) or {}
-    return meta.get("context") is True or text.startswith(INSTANCE_OPEN)
+    return meta.get("context") is True
 
 
 def _json_tail(text: str, start: int) -> Any:

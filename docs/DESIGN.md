@@ -56,6 +56,8 @@ The agent remembers the way a colleague on several teams does. Identity is conti
 
 Evidence for the audience comes from two places. The strongest is the binding an Instance verifies with the source provider and places in its conversation orientation (`owner`, provider, conversation, actor). The fallback is what the experience's prompt says: a Slack channel id beginning with `D`, a Conversations room with one person, a Minecraft whisper.
 
+Vigil reads an orientation only from a part of the prompt that the Instance marked as its own. The Instance's context opens with a fixed line, and anyone can type or attach text that opens the same way; such a part is heard as words, and it never names the agent or says who is listening. The mark is not a signature. Vigil believes whatever holds its client link, so keeping the mark off the parts a client supplies is the Instance's job, and what an experience's own prompt says about the speaker is that experience's.
+
 | Where a memory came from | Where it may surface |
 | --- | --- |
 | A private exchange with one person (direct message, whisper, call) | Only with that person, in private. The owner does not see other people's private exchanges. |
