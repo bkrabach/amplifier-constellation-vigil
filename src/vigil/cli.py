@@ -249,7 +249,7 @@ def cmd_status(args: argparse.Namespace) -> None:
         print(f"warning: {status['sessions_without_tools_24h']} conversation(s) in 24h where the engine never opened the memory tools (see logs/vigil.log)")
     for refusal in status.get("wake_refusals") or []:
         since = time.strftime("%Y-%m-%d %H:%M", time.localtime(refusal.get("since") or 0))
-        print(f"warning: {refusal['place']} has not let a wake-up be set since {since} ({refusal['count']} tries): {refusal['reason']}. What is held for it waits until someone speaks there.")
+        print(f"warning: {refusal['place']} has not let a wake-up be set since {since} ({refusal['count']} {'try' if refusal['count'] == 1 else 'tries'}): {refusal['reason']}. What is held for it waits until someone speaks there.")
     print(f"decisions in 24h: {decisions['count']} ({decisions['ok']} answered, avg {decisions['avg_ms']} ms) via {', '.join(decisions['backends']) or 'rules only'}")
     for place in status["places"]:
         print(f"  {place['place_label'] or place['surface']:<40} {place['audience']:<8} {place['turns']} turn(s)")
