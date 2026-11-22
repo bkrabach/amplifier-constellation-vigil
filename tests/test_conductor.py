@@ -523,10 +523,16 @@ wait_seconds = 5
 
 class GameTools:
     """The game connector's tool server as far as Vigil uses it: it lists its tools and
-    keeps one reminder. `offer=False` is a connector from before `follow_up` existed."""
+    keeps one reminder. `offer=False` is a connector from before `follow_up` existed, or
+    since its PR 162 removed it. `wake=True` adds the tool that keeps no time: it starts
+    one prompt per id, and answers an id it has seen with its first answer."""
 
-    def __init__(self, offer: bool = True, missing: str = "result") -> None:
+    def __init__(self, offer: bool = True, missing: str = "result", wake: bool = False) -> None:
         self.offer, self.refuse, self.calls, self.listed, self.token = offer, False, [], 0, "game-token"
+        #: The wake tool: the ids it started a prompt for, and how many answers to lose.
+        self.wake, self.woken, self.lose = wake, [], 0
+        #: Awaited with the id while a wake request is being handled, before it is answered.
+        self.during = None
         #: How a call to a tool that is not there is answered: as a tool result marked as an
         #: error, which is what the MCP SDK the game connector uses does, or as a protocol error.
         self.missing = missing
@@ -551,8 +557,21 @@ class GameTools:
             return web.Response(status=202)
         if method == "tools/list":
             self.listed += 1
-            return result({"tools": [{"name": name, "inputSchema": {"type": "object"}} for name in ["chat", "tell"] + (["follow_up"] if self.offer else [])]})
+            return result({"tools": [{"name": name, "inputSchema": {"type": "object"}}
+                                     for name in ["chat", "tell"] + (["follow_up"] if self.offer else []) + (["wake"] if self.wake else [])]})
         self.calls.append(body["params"])
+        if body["params"].get("name") == "wake" and self.wake:
+            asked = body["params"]["arguments"]["id"]
+            if self.refuse:
+                return result({"content": [{"type": "text", "text": "Wake unavailable: explicit_stop"}], "isError": True})
+            if asked not in self.woken:
+                self.woken.append(asked)  # the connector sends its prompt for this id, once
+                if self.during:
+                    await self.during(asked)
+            if self.lose:
+                self.lose -= 1
+                return web.Response(status=500)  # accepted, and the answer never arrives
+            return result({"content": [{"type": "text", "text": json.dumps({"queued": True, "id": asked})}]})
         if body["params"].get("name") == "follow_up" and not self.offer:
             if self.missing == "result":
                 return result({"content": [{"type": "text", "text": "MCP error -32602: Tool follow_up not found"}], "isError": True})
@@ -591,6 +610,13 @@ def game_chat(number: int, text: str, who: str = "Wren", source: str = "human") 
     message = {"id": f"m{number}", "source": source, "username": who, "message": text, "time": "2026-11-22T12:00:00.000Z", "server_attribution": None}
     return [{"type": "text", "text": "Current Minecraft tool permissions:\n" + json.dumps(permissions)},
             {"type": "text", "text": "Public Minecraft chat. To speak in the game use a Minecraft chat tool.\n" + json.dumps(message, ensure_ascii=False)}]
+
+
+def game_wake(ident: str, **extra) -> list[dict]:
+    """The turn the game connector starts when its `wake` tool is asked for one: the
+    prompt text agreed with the connector's owner."""
+    request = {"id": ident, "source": "agent_wake", "note": "Something you are holding for this conversation is due.", "time": "2026-11-22T12:00:00.000Z", **extra}
+    return [game_chat(0, "")[0], {"type": "text", "text": "Agent-requested wake. Nobody spoke in the game.\n" + json.dumps(request)}]
 
 
 def reminder(goal: str, world: dict | None = None) -> list[dict]:
@@ -668,6 +694,170 @@ def test_the_game_gives_the_agent_a_turn_for_what_it_holds_there(run):
         daemon.store.meta_set(f"wake:{scene.place}", "0")
         await prompt(game([{"id": "w1", "username": "Wren", "message": "psst", "source": "human", "whisper": True}]))
         assert len(tools.calls) == 5
+        await client.close()
+        await tools.stop()
+    run(scenario)
+
+
+def test_vigil_keeps_the_time_where_the_game_only_sends_the_prompt(run):
+    """The game connector plans nothing since its PR 162: no reminder, no timer. A live
+    agent then had no way back to a quiet world. With the connector's `wake` tool Vigil
+    keeps the time and asks for one prompt when something is due. The prompt is the
+    connector's own, so every approval in that turn is decided where it always is."""
+    async def scenario(config, daemon):
+        tools = GameTools(offer=False, wake=True)
+        await tools.start()
+        client = Client()
+        await client.attach(config)
+        state = config.home / "fake-state.json"
+        sid = (await client.conn.send_request("session/new", {"cwd": config.workspace, "mcpServers": [tools.server]}))["sessionId"]
+
+        async def prompt(blocks):
+            return await client.conn.send_request("session/prompt", {"sessionId": sid, "prompt": blocks})
+
+        def model_turns():
+            return len(json.loads(state.read_text())[sid]["prompts"])
+
+        def asked():
+            return json.loads(daemon.store.meta_get(f"wake-asked:{scene.place}") or "{}")
+
+        await prompt(game_chat(1, "hello there"))
+        scene = daemon.mind.scenes[sid]
+        assert tools.calls == [] and json.loads((config.secrets_dir / "wake-servers.json").read_text())[scene.place]["tool"] == "wake"
+        token = next(token for token, session in daemon.mind.tokens.items() if session == sid)
+        said = await daemon.mind.call(token, "mind_follow_up", {"about": "Ask Wren whether the door is wired.", "in_minutes": 10})
+        assert "It will come back to you here" in said and "cannot wake" not in said
+
+        # Nothing is asked at the end of a turn or before it is due: the time is Vigil's.
+        await prompt(game_chat(2, "anyone seen the iron?"))
+        await daemon.mind.tend_wakes()
+        assert tools.calls == []
+
+        # Due: one request, under an id of Vigil's own. While the connector has it, no second one.
+        daemon.store.run("UPDATE thoughts SET due=0")
+        await daemon.mind.tend_wakes()
+        await daemon.mind.tend_wakes()
+        assert [call["name"] for call in tools.calls] == ["wake"]
+        first = tools.calls[0]["arguments"]
+        assert set(first) == {"id", "note"} and first["id"].startswith("vigil-") and asked() == {"id": first["id"], "at": asked()["at"], "state": "queued"}
+
+        # A wake prompt under an id Vigil did not ask with is not Vigil's wake-up: the agent
+        # asked for it itself, or a client made one up. Staying quiet in it settles nothing.
+        await prompt(game_wake("someone-else", test="stay-silent"))
+        assert daemon.store.one("SELECT state FROM thoughts")["state"] == "pending" and asked()["id"] == first["id"]
+
+        # The connector's prompt for Vigil's request. The model gets the turn with the thought, and ends it without a word.
+        await prompt(game_wake(first["id"], test="stay-silent"))
+        brief = json.loads(state.read_text())[sid]["prompts"][-1][-1]["text"]
+        assert "Ask Wren whether the door is wired." in brief and "Deliver it now" in brief and "nobody spoke" in brief and "chat or tell" in brief
+        assert "standing next to you" not in brief
+        assert daemon.store.one("SELECT state FROM thoughts")["state"] == "delivered" and asked() == {}
+        assert daemon.store.one("SELECT count(*) AS n FROM journal WHERE mode='wake'")["n"] == 0  # nothing heard, nothing said: no journal row
+        await daemon.mind.tend_wakes()
+        assert len(tools.calls) == 1  # nothing is owed, so nothing is asked
+
+        # The same id again, late or made up: used once, so it is no longer Vigil's wake-up.
+        # With nothing due, Vigil's own wake-up would be answered without the model; this one is not.
+        turns = model_turns()
+        await prompt(game_wake(first["id"], test="stay-silent"))
+        assert model_turns() == turns + 1
+
+        # An answer that never arrives: the outcome is unknown, so the same id is asked again,
+        # and the connector, which had accepted it, starts no second prompt.
+        daemon.memory.thought_add(scene, "followup", "Ask about the roof.", 0)
+        tools.lose = 1
+        await daemon.mind.tend_wakes()
+        lost = tools.calls[-1]["arguments"]["id"]
+        assert asked()["state"] == "unknown" and lost != first["id"]
+        assert float(daemon.store.meta_get(f"wake:{scene.place}")) > time.time() + 250  # not again at once
+        await daemon.mind.tend_wakes()
+        assert len(tools.calls) == 2
+        daemon.store.meta_set(f"wake:{scene.place}", "0")
+        await daemon.mind.tend_wakes()
+        assert [call["arguments"]["id"] for call in tools.calls[1:]] == [lost, lost] and tools.woken == [first["id"], lost]
+        assert asked()["state"] == "queued" and daemon.store.meta_get(f"wake-refused:{scene.place}") is None
+
+        # The wake-up turn says it with chat and the game never confirms the line: still owed,
+        # and the next request waits five minutes.
+        await prompt(game_wake(lost, test="try-chat"))
+        assert daemon.store.one("SELECT state FROM thoughts ORDER BY id DESC LIMIT 1")["state"] == "pending"
+        assert 290 <= float(daemon.store.meta_get(f"wake:{scene.place}")) - time.time() <= 305
+        await daemon.mind.tend_wakes()
+        assert len(tools.calls) == 3
+
+        # A refusal is an answer: nothing was queued, so the next request has a new id, later.
+        daemon.store.meta_set(f"wake:{scene.place}", "0")
+        tools.refuse = True
+        await daemon.mind.tend_wakes()
+        refused = tools.calls[-1]["arguments"]["id"]
+        assert asked()["state"] == "refused" and refused not in (first["id"], lost)
+        assert json.loads(daemon.store.meta_get(f"wake-refused:{scene.place}"))["reason"] == "Wake unavailable: explicit_stop"
+        tools.refuse = False
+        daemon.store.meta_set(f"wake:{scene.place}", "0")
+        await daemon.mind.tend_wakes()
+        assert tools.calls[-1]["arguments"]["id"] not in (first["id"], lost, refused) and asked()["state"] == "queued"
+        assert daemon.store.meta_get(f"wake-refused:{scene.place}") is None
+
+        # Accepted, and its prompt is fifteen minutes overdue: that one is lost, and a new one is asked for.
+        record = asked()
+        daemon.store.meta_set(f"wake-asked:{scene.place}", json.dumps({**record, "at": time.time() - 901}))
+        await daemon.mind.tend_wakes()
+        assert tools.calls[-1]["arguments"]["id"] != record["id"] and len(tools.calls) == 6
+        await client.close()
+        await tools.stop()
+    run(scenario)
+
+
+def test_a_wake_prompt_that_arrives_before_its_answer_is_still_vigils_own(run):
+    """The connector sends its prompt as soon as it is asked, on another path than its
+    answer. Vigil keeps the id before it asks, so the prompt is recognised either way."""
+    async def scenario(config, daemon):
+        tools = GameTools(offer=False, wake=True)
+        await tools.start()
+        client = Client()
+        await client.attach(config)
+        sid = (await client.conn.send_request("session/new", {"cwd": config.workspace, "mcpServers": [tools.server]}))["sessionId"]
+        await client.conn.send_request("session/prompt", {"sessionId": sid, "prompt": game_chat(1, "hello there")})
+        place = daemon.mind.scenes[sid].place
+        daemon.memory.thought_add(daemon.mind.scenes[sid], "followup", "Ask Wren about the roof.", 0)
+        seen = []
+
+        async def prompt_first(ident):
+            seen.append(json.loads(daemon.store.meta_get(f"wake-asked:{place}")))
+            await client.conn.send_request("session/prompt", {"sessionId": sid, "prompt": game_wake(ident, test="stay-silent")})
+
+        tools.during = prompt_first
+        await daemon.mind.tend_wakes()
+        assert seen[0]["state"] == "unknown" and seen[0]["id"] == tools.calls[0]["arguments"]["id"]
+        # The quiet wake-up turn settled the thought, and the answer that came after it left no request behind.
+        assert daemon.store.one("SELECT state FROM thoughts")["state"] == "delivered"
+        assert daemon.store.meta_get(f"wake-asked:{place}") is None
+        await daemon.mind.tend_wakes()
+        assert len(tools.calls) == 1
+        await client.close()
+        await tools.stop()
+    run(scenario)
+
+
+def test_an_operator_hold_covers_the_wake_tool_that_keeps_no_time(run):
+    import argparse
+
+    from vigil.cli import cmd_wake
+
+    async def scenario(config, daemon):
+        tools = GameTools(offer=False, wake=True)
+        await tools.start()
+        client = Client()
+        await client.attach(config)
+        sid = (await client.conn.send_request("session/new", {"cwd": config.workspace, "mcpServers": [tools.server]}))["sessionId"]
+        await client.conn.send_request("session/prompt", {"sessionId": sid, "prompt": game_chat(1, "hello there")})
+        daemon.memory.thought_add(daemon.mind.scenes[sid], "followup", "Ask Wren about the roof.", 0)
+        await asyncio.to_thread(cmd_wake, argparse.Namespace(home=str(config.home), json=True, hold=["minecraft"], release=None))
+        await daemon.mind.tend_wakes()
+        assert tools.calls == []
+        await asyncio.to_thread(cmd_wake, argparse.Namespace(home=str(config.home), json=True, hold=None, release=["minecraft"]))
+        await daemon.mind.tend_wakes()
+        assert [call["name"] for call in tools.calls] == ["wake"]
         await client.close()
         await tools.stop()
     run(scenario)
