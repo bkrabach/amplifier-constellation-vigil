@@ -38,7 +38,7 @@ Slack · Minecraft · Companion · Conversations · Observatory · any ACP clien
 - **Reflexes from typed decision models.** Small, fast, non-generative models decide how hard to think, whether memory is worth reading, which journal entries deserve consolidation and whether unattended work is done. A wake-up with nothing to deliver costs no model call at all.
 - **Every provider the native engine supports.** The default runtime *is* the Constellation native engine, so OpenAI, Azure OpenAI, Anthropic, Gemini, Ollama, vLLM, Chat Completions, LiteLLM and GitHub Copilot all work, and new ones arrive with an engine update. Standing instructions are adjusted per model family, following each vendor's prompting guidance.
 - **Any ACP agent as a runtime.** Codex, Claude Agent, Gemini CLI or anything else that speaks ACP can be the main runtime or take delegated work.
-- **Voice that reaches the game.** With a bridge configured, a spoken request about the game goes straight to the agent's own player in that world, and the player's reply is the spoken answer: one model turn instead of two sessions relaying to each other.
+- **Voice that reaches the game.** With a bridge configured, a spoken request about the game goes straight to the agent's own player in that world, and the player's reply is the spoken answer: one model turn instead of two sessions relaying to each other. It needs a game connector that gives an outside caller's words to the game session; the Minecraft connector has not since its PR 162 (see [the bridge](#a-bridge-from-voice-to-the-game)).
 - **Degrades instead of going dark.** If the daemon is down, `vigil acp` runs the runtime directly. The agent still answers, without its mind, until the daemon returns.
 
 ## Install
@@ -213,6 +213,8 @@ label = "the Minecraft world"
 ```
 
 During a Companion call, a decision model judges whether each remark is about the game. If it is, Vigil passes the caller's exact words to the body through the adapter's installation-caller interface and speaks the reply.
+
+The Minecraft connector gave such words to the game session until its PR 162 (2026-11-22). Since then it still accepts them and gives them to nobody. Vigil then tells the call session that the words are waiting and have not been taken up, after the caller has waited out `wait_seconds`. Behind that connector, leave the bridge out or set `voice = false`.
 
 The other direction, the agent noticing what happens in the world while you talk, is Conversations' own feature and needs no Vigil code: add a read-only observer for the agent's body to that installation's `companion-awareness.json` (see *Read-only observers* in the Conversations Companion guide). The observer's configuration is three fields: the body's home, a connection id, and the player name.
 
