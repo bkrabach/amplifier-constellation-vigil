@@ -90,7 +90,7 @@ class Scene:
     def reply_hidden(self) -> bool:
         """Whether the text that ends this turn is shown to nobody. The game connector
         showed it only for a person's own message before its PR 162, and never since."""
-        return self.speech_by_tool or (self.surface == "minecraft" and self.mode in ("ambient", "continuation"))
+        return self.speech_by_tool or (self.surface == "minecraft" and self.mode in ("ambient", "continuation", "wake"))
 
     @property
     def private(self) -> bool:
@@ -314,6 +314,10 @@ def _game_line(message: Any, self_handle: str | None) -> tuple[str, Who, str, fl
 GAME_CHAT, GAME_PLANNED = "Current Minecraft tool permissions:", "Current adapter permission policy for this turn:"
 
 
+#: How the game connector opens the turn its `wake` tool was asked for.
+GAME_WAKE = "Agent-requested wake. Nobody spoke in the game."
+
+
 def _minecraft_chat(scene: Scene, texts: list[str]) -> None:
     """One public chat line, as the game connector sends it since its PR 162
     (`adapter.py`, `deliver`): its tool permissions, then a line of guidance followed by
@@ -324,6 +328,13 @@ def _minecraft_chat(scene: Scene, texts: list[str]) -> None:
     body = texts[-1] if len(texts) > 1 else ""
     at = body.find("{")
     message = _json_tail(body, at) if at >= 0 else None
+    if body.startswith(GAME_WAKE):
+        # The turn the connector's `wake` tool was asked for: nobody spoke. The id is
+        # the asker's; `Mind._wake_arrived` decides whether it was Vigil's own request.
+        scene.mode, scene.reminder = "wake", True
+        if isinstance(message, dict) and message.get("source") == "agent_wake" and isinstance(message.get("id"), str):
+            scene.wake = message["id"] or None
+        return
     if not isinstance(message, dict) or not isinstance(message.get("username"), str) or not isinstance(message.get("message"), str):
         scene.heard = body  # not the chat line this reader knows: keep the words, name nobody
         return

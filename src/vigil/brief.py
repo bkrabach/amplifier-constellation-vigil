@@ -32,6 +32,7 @@ AUDIENCE_TEXT = {
 MODE_TEXT = {
     "ambient": "nobody addressed you directly",
     "continuation": "a continuation of work you already accepted",
+    "wake": "nobody spoke; this is a turn that was asked for so you could come back here",
     "voice": "a live voice call, so your reply is read aloud and the caller cannot skim it: give the answer in one or two short sentences, about 30 words at most, no lists or formatting, and offer more if they want it",
 }
 
@@ -133,7 +134,7 @@ def compose(scene: Scene, memory: Memory, config: Config, extras: dict[str, Any]
     names = _names_here(scene, memory)
     if names:
         add("Names here: " + "; ".join(names) + ".")
-    if scene.surface == "minecraft" and scene.mode not in ("ambient", "continuation"):
+    if scene.surface == "minecraft" and scene.mode not in ("ambient", "continuation", "wake"):
         add("People in the game are standing next to you in real time. Before something that takes more than a few seconds, say a word first so they know you are on it.")
     if scene.surface == "minecraft" and scene.audience == "group":
         if scene.reply_hidden:
