@@ -698,9 +698,9 @@ def test_brief_names_place_people_and_due_thoughts(memory: Memory):
 
 
 def test_a_wake_up_turn_shows_what_it_is_for_whole_and_as_something_to_do(memory: Memory):
-    """On a live agent a follow-up that was work in a game world came up in its own
-    wake-up turn cut off at 320 characters, under "To bring up now, in your own words".
-    With nobody to tell, the agent restated the plan and held it again."""
+    """On a live agent a follow-up that was a plan for work in a game world came up in
+    its own wake-up turn cut off at 320 characters, under "To bring up now, in your own
+    words": the agent's plan for the turn, shortened and presented as a remark."""
     plan = ("No red mushrooms within 48 blocks of the shop. Next: travel in bounded steps of about 60 blocks in one direction, running a find at each stop. "
             "Bring back surplus to Rook and leave some to spread. " + "The barrel is by the east door. " * 8 + "Stop at dusk and come back.")
     assert 320 < len(plan) < 900
