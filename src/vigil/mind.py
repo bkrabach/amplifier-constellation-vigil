@@ -990,7 +990,10 @@ class Mind:
             count = self._wake_refused(scene.place, reason)
             log.info("wake not armed for %s (%d in a row): %s", scene.place, count, error)
             if "HTTP 401" in str(error) or "HTTP 403" in str(error):
-                self._forget_wake(scene.place)  # the connector's credential changed; the next turn there brings the new one
+                # The connector's credential changed. The descriptor this session was given
+                # is no use until the connector loads the session again with a new one.
+                self._forget_wake(scene.place)
+                self.wake_offered[server["url"]] = ("", now())
             elif tending:
                 # A refusal or an unreachable connector: look again after a while, not on
                 # every pass, and less often while the answer stays the same. Half an hour
@@ -1063,9 +1066,9 @@ class Mind:
         is asked about again under the same id, which the connector answers as it did
         the first time. A new id is made only for a request the connector said it did
         not and will not send (`queued: false`), after an id's prompt has come, or for
-        work that was not due when the last one was asked. An earlier id stays Vigil's
-        own, so its prompt is recognised whenever it comes; with nothing left to
-        deliver, that turn is answered without the model."""
+        once everything the last one was asked for has been settled another way. Such
+        an earlier id stays Vigil's own, so its prompt is recognised whenever it comes;
+        with nothing left to deliver, that turn is answered without the model."""
         key = f"wake:{scene.place}"  # for such a tool: the time before which nothing is asked
         wait = self._next_wake(scene)
         if wait is None or wait > float(self.config.mind("followup_chain_horizon_hours", 24)) * 3600:
@@ -1092,14 +1095,17 @@ class Mind:
         due = self._wake_due(scene)
         ident, state = str(asked.get("id") or ""), asked.get("state")
         earlier = [one for one in asked.get("open") or [] if isinstance(one, str)]
-        if ident and state in ("queued", "unknown") and set(due) <= set(asked.get("for") or []):
+        repeat = bool(ident) and state in ("queued", "unknown")
+        if repeat and set(due) & set(asked.get("for") or []):
             if state == "queued" and now() < again:
                 return True  # accepted: the connector sends its prompt when it can
-            record = {**asked, "open": earlier}  # the same work: the same id, to learn what became of it
+            record = {**asked, "open": earlier}  # its work is still owed: the same id, to learn what became of it
         else:
-            if ident and state in ("queued", "unknown"):
-                earlier = (earlier + [ident])[-8:]  # new work gets a request of its own; that one's prompt may still come
-            ident = "vigil-" + secrets.token_hex(8)
+            if repeat:
+                # What that request was for has been settled another way. Its prompt may
+                # still come, and is still Vigil's own; what is due now gets its own.
+                earlier = (earlier + [ident])[-8:]
+            repeat, ident = False, "vigil-" + secrets.token_hex(8)
             record = {"id": ident, "at": now(), "for": due, "open": earlier}
         # Kept before the call: the connector's prompt can arrive before its answer does,
         # and a daemon that stops in between must ask about this id again, not make another.
@@ -1114,18 +1120,21 @@ class Mind:
             # A transport error can name the connector's address, and the record is in
             # the state database: only its kind is kept.
             http = re.search(r"HTTP \d{3}", str(error))
-            # Turned away before the tool was reached: nothing was queued.
-            answer = "refused" if http and http.group(0) in ("HTTP 401", "HTTP 403", "HTTP 404") else "unknown"
+            # Turned away before the tool was reached: this request queued nothing. For an
+            # id asked before, that says nothing about the earlier request, which stands.
+            answer = "refused" if not repeat and http and http.group(0) in ("HTTP 401", "HTTP 403", "HTTP 404") else "unknown"
             reason = f"the connector answered {http.group(0)}" if http else f"the connector could not be reached ({type(error).__name__})"
             if await self._wake_tool_gone(scene, server, tool):
                 return False
             if http and http.group(0) in ("HTTP 401", "HTTP 403"):
-                self._forget_wake(scene.place)  # the connector's credential changed; the next turn there brings the new one
+                # The connector's credential changed. The descriptor this session was given
+                # is no use until the connector loads the session again with a new one.
+                self._forget_wake(scene.place)
+                self.wake_offered[server["url"]] = ("", now())
         if self._wake_asked(scene.place).get("id") != ident:
             return True  # its prompt has already come: the answer no longer matters
         if answer == "queued":
-            first = state != "queued" or record.get("id") != asked.get("id")
-            self._wake_record(scene.place, {**record, "state": "queued", "again": now() + (WAKE_GRACE if first else 1800)})
+            self._wake_record(scene.place, {**record, "state": "queued", "again": now() + (1800 if repeat and state == "queued" else WAKE_GRACE)})
             self._wake_refused(scene.place, None)
             return True
         self._wake_record(scene.place, {**record, "state": answer})
@@ -1157,6 +1166,16 @@ class Mind:
         wake-up is set. It covers what the end of a turn cannot: a restart, a reminder
         the connector dropped (a Stop cancels it), work that finished in the background.
         Only places whose tool can be called from outside a turn are tended."""
+        for sid, servers in list(self.servers.items()):
+            # A conversation loaded since the daemon started and not yet spoken in: its
+            # connector's tool server came with the load, and the last turn there says
+            # which place it is. Ask it for its wake tool now, so that what is held
+            # there does not wait for someone to speak first. The server's name says
+            # which experience it is; the kept surface can be an older reader's mistake.
+            surface = next((name for name, spec in WAKE_TOOLS.items() if spec[2] and any(str(s.get("name", "")).startswith(spec[0]) and s.get("url") for s in servers)), None)
+            row = self.store.session(sid) if surface and sid not in self.turns else None
+            if row and row["place"] and row["audience"] == "group":
+                await self._probe_wake(sid, Scene(session=sid, surface=surface, place=row["place"], place_label=row["place_label"] or "", audience="group"))
         for place, saved in list(self._saved_wakes().items()):
             sid = str(saved.get("session") or "")
             if sid in self.turns:

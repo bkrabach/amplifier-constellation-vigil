@@ -821,14 +821,19 @@ def test_vigil_keeps_the_time_where_the_game_only_sends_the_prompt(run):
         assert json.loads(daemon.store.meta_get(f"wake-refused:{scene.place}"))["reason"] == "Internal error"
         tools.broken = False
 
-        # Other work comes due while that prompt is still out: a request of its own. The
-        # earlier id stays Vigil's, so its prompt is recognised whenever it comes.
+        # Other work comes due while that prompt is still out. What it was asked for is still
+        # owed, so there is still only that one request: its turn will show everything due.
         daemon.memory.thought_add(scene, "followup", "Ask about the windows.", 0)
         daemon.store.meta_set(f"wake:{scene.place}", "0")
         await daemon.mind.tend_wakes()
+        assert tools.calls[-1]["arguments"]["id"] == again and len(tools.calls) == 8 and asked()["state"] == "queued" and asked()["open"] == []
+        # That work is settled another way (said at a chat line, or cancelled). What is due now
+        # gets a request of its own, and the earlier id stays Vigil's for whenever its prompt comes.
+        daemon.store.run("UPDATE thoughts SET state='delivered' WHERE text LIKE 'Ask about the roof%'")
+        await daemon.mind.tend_wakes()
         newer = tools.calls[-1]["arguments"]["id"]
         assert newer != again and asked()["id"] == newer and asked()["open"] == [again]
-        await prompt(game_wake(newer, test="stay-silent"))  # it shows everything due, and the quiet agent settles it
+        await prompt(game_wake(newer, test="stay-silent"))  # the quiet agent settles what it is shown
         assert [row["state"] for row in daemon.store.q("SELECT state FROM thoughts ORDER BY id")] == ["delivered"] * 3
         assert asked() == {"open": [again]}
         # The delayed prompt arrives at last, with nothing left to deliver: answered without the model.
@@ -836,10 +841,77 @@ def test_vigil_keeps_the_time_where_the_game_only_sends_the_prompt(run):
         assert await prompt(game_wake(again)) == {"stopReason": "end_turn", "_meta": {"dev.vigil": {"wake": "quiet"}}}
         assert model_turns() == turns and asked() == {}
         await daemon.mind.tend_wakes()
-        assert len(tools.calls) == 8
+        assert len(tools.calls) == 9
         await client.close()
         await tools.stop()
     run(scenario)
+
+
+def test_a_loaded_game_session_is_asked_for_its_wake_tool_before_anyone_speaks(tmp_path):
+    """After a restart the connector loads its session again and may say nothing for hours.
+    Vigil knew a connector's tools only from a turn, so work held for a quiet world waited
+    for someone to speak there: the one thing a wake-up exists to avoid."""
+    async def body():
+        config = make_home(tmp_path, free_port())
+        tools = GameTools(offer=False)  # the connector before it had the tool
+        await tools.start()
+        saved = config.secrets_dir / "wake-servers.json"
+
+        daemon, task = await started(config)
+        client = Client()
+        await client.attach(config)
+        sid = (await client.conn.send_request("session/new", {"cwd": config.workspace, "mcpServers": [tools.server]}))["sessionId"]
+        await client.conn.send_request("session/prompt", {"sessionId": sid, "prompt": game_chat(1, "hello there")})
+        scene = daemon.mind.scenes[sid]
+        place = scene.place
+        daemon.memory.thought_add(scene, "followup", "Search for the red mushrooms.", 0)
+        await daemon.mind.tend_wakes()
+        assert tools.calls == [] and not saved.exists()
+        # An earlier reader had filed this session's turns as direct ones; the place was right.
+        daemon.store.run("UPDATE sessions SET surface='direct' WHERE id=?", (sid,))
+        await client.close()
+        daemon._stop.set()
+        await task
+
+        tools.wake = True  # the connector is updated, and loads its session again
+        daemon, task = await started(config)
+        try:
+            mind = daemon.mind
+            client = Client()
+            await client.attach(config)
+            await client.conn.send_request("session/load", {"sessionId": sid, "cwd": config.workspace, "mcpServers": [tools.server]})
+            await mind.tend_wakes()  # nobody has spoken
+            assert [call["name"] for call in tools.calls] == ["wake"] and json.loads(saved.read_text())[place]["tool"] == "wake"
+            ident = tools.calls[0]["arguments"]["id"]
+            await client.conn.send_request("session/prompt", {"sessionId": sid, "prompt": game_wake(ident, test="stay-silent")})
+            brief = json.loads((config.home / "fake-state.json").read_text())[sid]["prompts"][-1][-1]["text"]
+            assert "Search for the red mushrooms." in brief and "Deliver it now" in brief
+            assert daemon.store.one("SELECT surface FROM sessions WHERE id=?", (sid,))["surface"] == "minecraft"
+
+            # The connector's credential changes while an accepted request is still out. The failed
+            # question says nothing about the request made before it: its id is kept.
+            daemon.memory.thought_add(Scene(session=sid, surface="minecraft", place=place, audience="group"), "followup", "Look for slime.", 0)
+            daemon.store.meta_set(f"wake:{place}", "0")
+            await mind.tend_wakes()
+            kept = json.loads(daemon.store.meta_get(f"wake-asked:{place}"))
+            assert kept["state"] == "queued" and kept["id"] == tools.calls[-1]["arguments"]["id"] != ident
+            tools.token = "rotated"
+            daemon.store.meta_set(f"wake-asked:{place}", json.dumps({**kept, "again": 0}))
+            await mind.tend_wakes()
+            after = json.loads(daemon.store.meta_get(f"wake-asked:{place}"))
+            assert (after["id"], after["state"]) == (kept["id"], "unknown") and json.loads(saved.read_text()) == {}
+            assert json.loads(daemon.store.meta_get(f"wake-refused:{place}"))["reason"] == "the connector answered HTTP 401"
+            # The stale descriptor is not picked up again from the session that still carries it.
+            calls = len(tools.calls)
+            daemon.store.meta_set(f"wake:{place}", "0")
+            await mind.tend_wakes()
+            assert json.loads(saved.read_text()) == {} and len(tools.calls) == calls
+            await client.close()
+        finally:
+            daemon._stop.set()
+            await task
+            await tools.stop()
+    asyncio.run(body())
 
 
 def test_a_wake_prompt_that_arrives_before_its_answer_is_still_vigils_own(run):
