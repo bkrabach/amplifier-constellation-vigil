@@ -205,6 +205,8 @@ def compose(scene: Scene, memory: Memory, config: Config, extras: dict[str, Any]
         add("To bring up now, in your own words. Skip any that no longer fit:")
         for thought in due:
             label = {"followup": "a follow-up you set", "task": "background work you delegated has finished", "held": "you were holding this"}.get(thought["kind"], thought["kind"])
+            if thought["place"] != scene.place and thought["place_label"]:  # held somewhere else: say where, so it can be judged from here
+                label += f" in {thought['place_label']}"
             sent = thought["kind"] == "followup" and '"sent_by_owner": true' in (thought.get("data") or "")
             if sent:  # a repeating one the owner set for this place
                 label = "your owner asked this of you in private, and you set it for this place"

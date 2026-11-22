@@ -498,10 +498,12 @@ def test_rehearsal_places_keep_practice_out_of_real_work(memory: Memory):
     # Coming up empty there, the agent is told why. Asked in a real room about a test
     # workspace, a live agent guessed that the chats ran on another instance.
     assert memory.practice_kept_apart(real) and not memory.practice_kept_apart(practice)
-    # Another room of the same practice workspace follows the ordinary rules.
+    # Another room of the same practice workspace follows the ordinary rules: recall crosses,
+    # and a thought held for a person waits for the room it was held in.
     practice_two = scene_for(memory, "slack:TEST:C2", "group", owner_test)
     assert "Friday" in text(practice_two, "pretend launch Friday") and memory.elsewhere(practice_two)
-    assert [t["text"] for t in memory.thoughts_due(practice_two)] == ["ask Olive how the drill went"]
+    assert memory.thoughts_due(practice_two) == []
+    assert [t["text"] for t in memory.thoughts_due(scene_for(memory, "slack:TEST:C1", "group", owner_test))] == ["ask Olive how the drill went"]
     # The owner, in private: nothing surfaces unasked, but an explicit lookup finds it.
     private = scene_for(memory, "slack:T1:D1", "dm", owner_real)
     assert private.audience == "owner" and memory.elsewhere(private) == [] and memory.note_subjects(private) == (0, [])
@@ -547,11 +549,35 @@ def test_thought_scopes(memory: Memory):
     stranger = scene_for(memory, "slack:T1:C9", "group", Who("slack:T1", "U5", "Eli"))
     texts = lambda scene: sorted(t["text"] for t in memory.thoughts_due(scene))  # noqa: E731
     assert texts(here) == ["ask Dana about the offsite", "check the deploy"]
-    assert texts(elsewhere) == ["ask Dana about the offsite"] and texts(stranger) == []
+    assert texts(elsewhere) == [] and texts(stranger) == []
     assert texts(owner) == ["weekly summary"]
     ids = [t["id"] for t in memory.thoughts_due(here)]
     memory.thoughts_delivered(ids, "s")
     assert memory.thoughts_due(here) == [] and memory.thoughts_due(elsewhere) == []
+
+
+def test_a_thought_held_for_a_person_is_not_raised_in_another_room(memory: Memory):
+    """On a live agent three follow-ups held for people in Slack channels were handed over in
+    a game world the moment those people spoke there. Nothing in them could be done from the
+    game, the agent rightly said none of it, and all three were marked delivered and lost."""
+    dana = Who("slack:T1", "U2", "Dana")
+    room = scene_for(memory, "slack:T1:C1", "group", dana, [Who("slack:T1", "U5", "Eli")])
+    other_room = scene_for(memory, "slack:T1:C9", "group", dana, [Who("slack:T1", "U7", "Noor")])
+    alone = scene_for(memory, "slack:T1:D2", "dm", dana)
+    memory.thought_add(room, "followup", "ask Dana whether the venue was booked", 0, "person")
+    assert memory.thoughts_due(other_room) == [] and "venue" not in compose(other_room, memory, memory.config)[0]
+    assert memory.store.one("SELECT state FROM thoughts")["state"] == "pending"  # still held, not used up
+    # Alone with them it comes up, and the brief says where it was held.
+    brief = compose(alone, memory, memory.config)[0]
+    assert "a follow-up you set in slack:T1:C1" in brief and "ask Dana whether the venue was booked" in brief
+    # Where it was held it comes up as before, with no place named.
+    assert [t["text"] for t in memory.thoughts_due(room)] == ["ask Dana whether the venue was booked"]
+    assert "a follow-up you set," in compose(room, memory, memory.config)[0]
+    # What was held alone with someone still follows them to another private conversation, and to no room.
+    memory.thought_add(alone, "followup", "tell Dana the quote arrived", 0, "person")
+    another_dm = scene_for(memory, "slack:T2:D8", "dm", dana)
+    assert "tell Dana the quote arrived" in [t["text"] for t in memory.thoughts_due(another_dm)]
+    assert "tell Dana the quote arrived" not in [t["text"] for t in memory.thoughts_due(room)]
 
 
 def test_brief_names_place_people_and_due_thoughts(memory: Memory):
