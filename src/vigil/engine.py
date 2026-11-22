@@ -42,7 +42,24 @@ REPOSITORY = "microsoft/amplifier-constellation-runtime"
 #: sends a saved Markdown, text, CSV or JSON document (up to 200,000 bytes) to the
 #: conversation as an embedded resource. It is one more built-in tool, so installing
 #: it changes every session's tool list once.
+#: Up to 0.15.15 one HTTP MCP tool call whose reply was lost shut that server's tools
+#: out of the session until it was loaded again: on a live agent a failed Slack huddle
+#: call left a conversation without any Slack tool, so it could not post what it had
+#: been asked for. From 0.15.16 the outcome is recorded as unknown, and for the rest
+#: of that turn only a different call to a tool the server marks read-only is sent;
+#: the next turn is unaffected. 0.15.15 changed only the ChatGPT model catalog.
+#: Neither changes a tool definition.
 RELEASES: dict[str, dict[str, dict[str, str]]] = {
+    "0.15.16": {
+        "linux-aarch64": {
+            "asset_sha256": "78a36160466ee46eb7b82ff327f6b4eed9ce7e8460963546d59cec74fec2da9c",
+            "binary_sha256": "b009e0ef16993cd1c1e1248977a1086307f12886b689fcc0d22e97f28967407c",
+        },
+        "linux-x86_64": {
+            "asset_sha256": "1aac11ab5c30e0285e03f16913c57210b4d2cd90504a1388f84a9feca9d582bd",
+            "binary_sha256": "e3e5140a75276c8d9a523fa3c648e775d2a1ffd64d0941763194eada840f23f2",
+        },
+    },
     "0.15.14": {
         "linux-aarch64": {
             "asset_sha256": "08f84d1528de2472fafbd95f7bfd335847f958b9a134472ad2afa900a904c1bf",
@@ -104,7 +121,7 @@ RELEASES: dict[str, dict[str, dict[str, str]]] = {
         },
     },
 }
-DEFAULT_VERSION = "0.15.14"
+DEFAULT_VERSION = "0.15.16"
 
 #: Mind tools that change Vigil's own memory. The engine is told it may call them
 #: without asking, since nothing outside Vigil is affected.
