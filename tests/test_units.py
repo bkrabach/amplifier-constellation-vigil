@@ -174,6 +174,25 @@ def test_a_game_chat_line_from_the_connector_that_plans_nothing():
     assert earlier.surface == "minecraft" and earlier.heard == "come build" and not earlier.reply_hidden
 
 
+def test_only_an_explicit_answer_says_a_wake_request_was_not_queued():
+    """The connector sends at most one prompt per id. Vigil makes a second id for the same
+    work only when the connector said the first was not and will not be sent."""
+    from vigil.mind import refusal_words, wake_answer
+
+    def text(value, error=False):
+        return {"content": [{"type": "text", "text": value if isinstance(value, str) else json.dumps(value)}], "isError": error}
+
+    assert wake_answer(text({"queued": True, "id": "vigil-1"})) == "queued"
+    assert wake_answer({"structuredContent": {"queued": True, "id": "vigil-1"}, "content": []}) == "queued"
+    assert wake_answer(text("ok")) == "queued" and wake_answer({}) == "queued"  # it answered, and did not say no
+    refusal = text({"queued": False, "id": "vigil-1", "reason": "Wake unavailable: explicit_stop"}, error=True)
+    assert wake_answer(refusal) == "refused" and refusal_words(refusal) == "Wake unavailable: explicit_stop"
+    assert wake_answer(text({"queued": False, "id": "vigil-1"})) == "refused"
+    # An error that does not say so: the request may have been admitted before whatever failed.
+    for unclear in (text("Internal error", error=True), text({"error": "busy"}, error=True), text({"queued": "no"}, error=True), {"isError": True}, text({"queued": True}, error=True)):
+        assert wake_answer(unclear) == "unknown"
+
+
 def test_the_turn_the_game_connector_starts_when_asked_for_one():
     """The connector's `wake` tool starts a prompt in which nobody spoke. The reader marks it
     and passes on the asker's id; whether that id is Vigil's own is the mind's to decide."""
