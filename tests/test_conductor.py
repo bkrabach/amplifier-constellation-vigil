@@ -379,7 +379,7 @@ def test_quiet_wake_costs_no_model_call(run):
         daemon.memory.thought_add(scene, "followup", "Ask whether the deploy finished.", 0)
         await client.conn.send_request("session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": slack("D9", "UOWNER", "remind me", wake)}]})
         brief = json.loads((config.home / "fake-state.json").read_text())[sid]["prompts"][0][-1]["text"]
-        assert "Ask whether the deploy finished." in brief and "Deliver it now" in brief
+        assert "Ask whether the deploy finished." in brief and "do it now with the tools you have here" in brief
         assert daemon.store.one("SELECT state FROM thoughts")["state"] == "delivered"
         await client.close()
     run(scenario)
@@ -670,7 +670,7 @@ def test_the_game_gives_the_agent_a_turn_for_what_it_holds_there(run):
         daemon.store.run("UPDATE thoughts SET due=0")
         await prompt(reminder(tools.calls[1]["arguments"]["goal"], {"note": "stay-silent"}))
         brief = json.loads(state.read_text())[sid]["prompts"][-1][-1]["text"]
-        assert "Ask Wren whether the door is wired." in brief and "Deliver it now" in brief and "chat or tell" in brief
+        assert "Ask Wren whether the door is wired." in brief and "do it now with the tools you have here" in brief and "chat or tell" in brief
         assert client.updates[-1]["content"]["text"] == "done"  # the silent turn sent nothing
         # It chose not to raise it. Held open, the thought would wake the conversation again in seconds.
         assert daemon.store.one("SELECT state FROM thoughts")["state"] == "delivered"
@@ -755,7 +755,7 @@ def test_vigil_keeps_the_time_where_the_game_only_sends_the_prompt(run):
         # The connector's prompt for Vigil's request. The model gets the turn with the thought, and ends it without a word.
         await prompt(game_wake(first["id"], test="stay-silent"))
         brief = json.loads(state.read_text())[sid]["prompts"][-1][-1]["text"]
-        assert "Ask Wren whether the door is wired." in brief and "Deliver it now" in brief and "nobody spoke" in brief and "chat or tell" in brief
+        assert "Ask Wren whether the door is wired." in brief and "do it now with the tools you have here" in brief and "nobody spoke" in brief and "chat or tell" in brief
         assert "standing next to you" not in brief
         assert daemon.store.one("SELECT state FROM thoughts")["state"] == "delivered" and asked() == {}
         assert daemon.store.one("SELECT count(*) AS n FROM journal WHERE mode='wake'")["n"] == 0  # nothing heard, nothing said: no journal row
@@ -885,7 +885,7 @@ def test_a_loaded_game_session_is_asked_for_its_wake_tool_before_anyone_speaks(t
             ident = tools.calls[0]["arguments"]["id"]
             await client.conn.send_request("session/prompt", {"sessionId": sid, "prompt": game_wake(ident, test="stay-silent")})
             brief = json.loads((config.home / "fake-state.json").read_text())[sid]["prompts"][-1][-1]["text"]
-            assert "Search for the red mushrooms." in brief and "Deliver it now" in brief
+            assert "Search for the red mushrooms." in brief and "do it now with the tools you have here" in brief
             assert daemon.store.one("SELECT surface FROM sessions WHERE id=?", (sid,))["surface"] == "minecraft"
 
             # The connector's credential changes while an accepted request is still out. The failed

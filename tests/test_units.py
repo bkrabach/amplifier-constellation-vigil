@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import time
 from pathlib import Path
@@ -694,6 +695,22 @@ def test_brief_names_place_people_and_due_thoughts(memory: Memory):
     assert text.startswith(OPEN) and text.endswith(CLOSE) and len(surfaced) == 1
     for expected in ("a group", "Speaking: Dana", "Dana runs the release train.", "check the deploy", "Notebook: 1 notes"):
         assert expected in text
+
+
+def test_a_wake_up_turn_shows_what_it_is_for_whole_and_as_something_to_do(memory: Memory):
+    """On a live agent a follow-up that was a plan for work in a game world came up in
+    its own wake-up turn cut off at 320 characters, under "To bring up now, in your own
+    words": the agent's plan for the turn, shortened and presented as a remark."""
+    plan = ("No red mushrooms within 48 blocks of the shop. Next: travel in bounded steps of about 60 blocks in one direction, running a find at each stop. "
+            "Bring back surplus to Rook and leave some to spread. " + "The barrel is by the east door. " * 8 + "Stop at dusk and come back.")
+    assert 320 < len(plan) < 900
+    game = scene_for(memory, "minecraft:world", "group", None)
+    memory.thought_add(game, "followup", plan, 0, "here")
+    spoken_to, _ = compose(dataclasses.replace(game, actor=Who("minecraft", "Wren", "Wren")), memory, memory.config)
+    assert "To bring up now, in your own words." in spoken_to and "Stop at dusk and come back." not in spoken_to  # in passing, its opening is enough
+    woken, surfaced = compose(dataclasses.replace(game, wake="vigil-1", mode="wake"), memory, memory.config)
+    assert "Due now, and the reason for this turn." in woken and "by doing it here or by saying it" in woken and "To bring up now" not in woken
+    assert plan in woken and len(surfaced) == 1
 
 
 # ---- small pieces ------------------------------------------------------------------

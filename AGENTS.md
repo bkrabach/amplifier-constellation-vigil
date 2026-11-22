@@ -53,6 +53,8 @@ The product page (`site/`, published at <https://bkrabach.github.io/amplifier-co
 
 `tests/test_github.py` checks the GitHub tools against a stand-in for GitHub's API; `vigil github` and a real turn are the check against the real service. `tests/test_conductor.py` runs the real daemon against `tests/fake_runtime.py` and checks ordering, permissions, replay and the quiet wake-up. `tests/drive.py` talks to a live daemon as an experience would, including through an Instance with `--command`. A passing suite shows mechanics; judge model behaviour with real turns.
 
+`tests/wake_turn.py` plays a wake-up turn for a follow-up that is work, with the real engine and a stand-in game: it shows which tools the model called and what it held afterwards, one JSON line per run. Use it to compare two wordings of the brief by checking out each in turn. It shows what a wording does to a fresh session. On a live agent the same model postponed a search in two wake-up turns running, the second time because its own note said "plan a trip"; in the stand-in world it travelled in every run, with the old wording of the wake line and the new. So read what the agent wrote for itself before blaming the brief.
+
 A check "through Vigil" has to confirm that the daemon answered. A home whose path leaves no room for the socket (107 bytes on Linux) makes the daemon refuse to start, and `vigil acp` then runs the engine alone: a file-attachment check passed that way without Vigil in it. `_meta["dev.vigil"].mind` in the `initialize` reply is the daemon's mark, and `tests/runtime_matrix.py` now refuses to go on without it. Keep throwaway homes on a short path.
 
 ## Redeploying a live agent
