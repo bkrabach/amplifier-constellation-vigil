@@ -471,8 +471,11 @@ class GameTools:
     """The game connector's tool server as far as Vigil uses it: it lists its tools and
     keeps one reminder. `offer=False` is a connector from before `follow_up` existed."""
 
-    def __init__(self, offer: bool = True) -> None:
+    def __init__(self, offer: bool = True, missing: str = "result") -> None:
         self.offer, self.refuse, self.calls, self.listed, self.token = offer, False, [], 0, "game-token"
+        #: How a call to a tool that is not there is answered: as a tool result marked as an
+        #: error, which is what the MCP SDK the game connector uses does, or as a protocol error.
+        self.missing = missing
         self.port = free_port()
         self.server = {"type": "http", "name": "minecraft", "url": f"http://127.0.0.1:{self.port}/mcp",
                        "headers": [{"name": "Authorization", "value": "Bearer game-token"}]}
@@ -496,6 +499,10 @@ class GameTools:
             self.listed += 1
             return result({"tools": [{"name": name, "inputSchema": {"type": "object"}} for name in ["chat", "tell"] + (["follow_up"] if self.offer else [])]})
         self.calls.append(body["params"])
+        if body["params"].get("name") == "follow_up" and not self.offer:
+            if self.missing == "result":
+                return result({"content": [{"type": "text", "text": "MCP error -32602: Tool follow_up not found"}], "isError": True})
+            return web.json_response({"jsonrpc": "2.0", "id": body.get("id"), "error": {"code": -32602, "message": "Tool follow_up not found"}})
         if self.refuse:
             return result({"content": [{"type": "text", "text": "Follow-up unavailable: explicit_stop"}], "isError": True})
         return result({"content": [{"type": "text", "text": json.dumps({"id": "r1", "status": "scheduled"})}]})
@@ -520,6 +527,16 @@ def game(messages: list[dict], world: dict | None = None) -> list[dict]:
 
 def chat(number: int, text: str) -> list[dict]:
     return game([{"id": f"c{number}", "username": "Wren", "message": text, "source": "human"}])
+
+
+def game_chat(number: int, text: str, who: str = "Wren", source: str = "human") -> list[dict]:
+    """One public chat line as the game connector sends it since its PR 162 (`deliver` in its
+    `adapter.py`, `blocks` in `context_snapshot.py`, `permission_context` in `acp_client.py`)."""
+    permissions = {"policy_revision": "0" * 64, "session_id": "s", "active": True, "server": "minecraft", "allow_once_tools": ["chat", "tell"],
+                   "scope": "same connected ACP session and registered Minecraft tool; disabled during replay and maintenance"}
+    message = {"id": f"m{number}", "source": source, "username": who, "message": text, "time": "2026-11-22T12:00:00.000Z", "server_attribution": None}
+    return [{"type": "text", "text": "Current Minecraft tool permissions:\n" + json.dumps(permissions)},
+            {"type": "text", "text": "Public Minecraft chat. To speak in the game use a Minecraft chat tool.\n" + json.dumps(message, ensure_ascii=False)}]
 
 
 def reminder(goal: str, world: dict | None = None) -> list[dict]:
@@ -647,6 +664,79 @@ def test_work_the_owner_sends_to_the_game_gets_a_turn_there(run):
         await client.close()
         await tools.stop()
         await old.stop()
+    run(scenario)
+
+
+@pytest.mark.parametrize("missing", ["result", "error"])
+def test_a_connector_that_removed_its_wake_tool_is_not_asked_again(run, missing):
+    """The game connector removed its reminder tool in an update (its PR 162) while a live
+    agent held work for the game. The daemon kept the tool server it had been given and
+    would have called it every half hour for a tool that was gone, with a warning in
+    `vigil status` that could never clear. The update also changed what a game prompt is:
+    one public chat line, and the text that ends the turn is shown to nobody."""
+    async def scenario(config, daemon):
+        tools = GameTools(missing=missing)
+        await tools.start()
+        client = Client()
+        await client.attach(config)
+        state = config.home / "fake-state.json"
+        sid = (await client.conn.send_request("session/new", {"cwd": config.workspace, "mcpServers": [tools.server]}))["sessionId"]
+
+        async def prompt(blocks):
+            return await client.conn.send_request("session/prompt", {"sessionId": sid, "prompt": blocks})
+
+        def status() -> str:
+            shown = io.StringIO()
+            with contextlib.redirect_stdout(shown):
+                cmd_status(argparse.Namespace(home=str(config.home), json=False, wait_idle=None))
+            return shown.getvalue()
+
+        mind = daemon.mind
+        await prompt(chat(1, "hello there"))
+        scene = mind.scenes[sid]
+        place, key = scene.place, f"wake:{scene.place}"
+        daemon.memory.thought_add(scene, "followup", "Ask Wren whether the door is wired.", time.time() + 600)
+        await prompt(chat(2, "back soon"))
+        assert len(tools.calls) == 1 and place in mind._saved_wakes() and tools.listed == 1
+
+        # A refusal from a connector that still has the tool is kept, and asked again later.
+        tools.refuse = True
+        daemon.store.meta_set(key, "0")
+        await mind.tend_wakes()
+        assert len(tools.calls) == 2 and tools.listed == 2 and place in mind._saved_wakes()
+        assert "warning: the Minecraft world has not let a wake-up be set" in await asyncio.to_thread(status)
+
+        # The connector is updated and the tool is gone. One more call finds that out, and it is the last.
+        tools.offer = False
+        daemon.store.meta_set(key, str(time.time() - 1000))
+        await mind.tend_wakes()
+        assert len(tools.calls) == 3 and tools.listed == 3
+        assert place not in mind._saved_wakes() and json.loads((config.secrets_dir / "wake-servers.json").read_text()) == {}
+        assert daemon._wake_refusals() == [] and "has not let a wake-up be set" not in await asyncio.to_thread(status)
+        await mind.tend_wakes()
+        await mind.tend_wakes()
+        assert len(tools.calls) == 3
+
+        # What is held waits for the next message there, and status says so: nothing else would.
+        daemon.store.run("UPDATE thoughts SET due=0")
+        assert "waiting: 1 follow-up(s) held for the Minecraft world, due since" in await asyncio.to_thread(status)
+        # That message arrives in the connector's new form.
+        await prompt(game_chat(3, "is the door wired?"))
+        now = mind.scenes[sid]
+        assert (now.surface, now.place, now.audience, now.heard, now.source_id) == ("minecraft", place, "group", "is the door wired?", "minecraft:m3")
+        assert now.actor.handle == "Wren" and not now.actor.is_agent and now.reply_hidden
+        brief = json.loads(state.read_text())[sid]["prompts"][-1][-1]["text"]
+        assert "Ask Wren whether the door is wired." in brief and "Here you speak with chat or tell" in brief and "spoken in public chat" not in brief
+        row = daemon.store.one("SELECT heard, said, actor_name, surface FROM journal ORDER BY id DESC LIMIT 1")
+        # The text that ended the turn went nowhere, so it is not kept as something said, and the thought is still owed.
+        assert (row["heard"], row["said"], row["actor_name"], row["surface"]) == ("is the door wired?", "", "Wren", "minecraft")
+        assert daemon.store.one("SELECT state FROM thoughts")["state"] == "pending"
+        assert len(tools.calls) == 3 and tools.listed == 3  # no reminder is asked for at the end of a turn either
+        # Told another time that it cannot be woken there, the agent hears so from its own tool.
+        token = next(token for token, session in mind.tokens.items() if session == sid)
+        assert "cannot wake you on its own" in await mind.call(token, "mind_follow_up", {"about": "Check the roof.", "in_minutes": 30})
+        await client.close()
+        await tools.stop()
     run(scenario)
 
 

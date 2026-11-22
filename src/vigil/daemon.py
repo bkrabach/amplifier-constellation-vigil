@@ -26,8 +26,8 @@ from .config import Config, ensure_layout, socket_path_problem
 from .decisions import Decider
 from . import github
 from .mcp import McpServer
-from .memory import Memory
-from .mind import MIND_INSTRUCTIONS, TOOLS, WAKE_REFUSED, Mind
+from .memory import Memory, owner_work_seen
+from .mind import MIND_INSTRUCTIONS, TOOLS, WAKE_GRACE, WAKE_REFUSED, Mind
 from .store import Store, now
 
 log = logging.getLogger("vigil")
@@ -39,6 +39,9 @@ class Daemon:
         ensure_layout(config.home)
         self.store = Store(config.db_path)
         self.memory = Memory(self.store, config)
+        reread = self.memory.reread_game_rows()
+        if reread:
+            log.info("read again %d game turn(s) that an earlier reader had filed as direct sessions", reread)
         self.decider = Decider(config, self.store)
         self.mind = Mind(self)
         self.links: dict[int, FrontLink] = {}
@@ -106,7 +109,20 @@ class Daemon:
                               "backends": [b.name for b in self.decider.backends]},
             "last_dream": store.meta_get("last_dream"),
             "wake_refusals": self._wake_refusals(),
+            "overdue": self._overdue(),
         })
+
+    def _overdue(self) -> list[dict[str, Any]]:
+        """What is held for a place and has been due for a while with no turn there to
+        bring it up. A place whose connector has no wake tool starts a turn only when
+        someone speaks, and nothing else shows that the agent's own work is waiting."""
+        late: dict[str, dict[str, Any]] = {}
+        for thought in self.memory.thoughts_pending():
+            if thought["scope"] != "here" or owner_work_seen(thought) or thought["due"] > now() - WAKE_GRACE:
+                continue
+            entry = late.setdefault(thought["place"], {"place": thought["place_label"] or thought["place"], "count": 0, "since": thought["due"]})
+            entry["count"], entry["since"] = entry["count"] + 1, min(entry["since"], thought["due"])
+        return list(late.values())
 
     def _wake_refusals(self) -> list[dict[str, Any]]:
         """Places whose connector will not set a wake-up: what the agent holds for them

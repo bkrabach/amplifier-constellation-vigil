@@ -119,6 +119,32 @@ class Memory:
             self.store.run("ALTER TABLE journal ADD COLUMN source_id TEXT")
         self.store.run("CREATE INDEX IF NOT EXISTS journal_source ON journal(source_id)")
 
+    def reread_game_rows(self) -> int:
+        """Read again the journal rows of game turns an earlier reader did not recognise.
+
+        The game connector changed its prompt in its PR 162, and before 0.1.27 each such
+        turn was filed as a direct session: the whole prompt as what was heard, under
+        nobody, and the text that ended the turn, which the game shows to nobody, as
+        said. Such a row holds both texts of its prompt, so the reader can be run on it
+        again. A row it still cannot place is left as it is. Returns how many were put right."""
+        from . import surfaces
+
+        fixed = 0
+        for row in self.store.q("SELECT id, session, heard FROM journal WHERE surface='direct' AND heard LIKE ?", (surfaces.GAME_CHAT + "%",)):
+            texts = row["heard"].split("\n\n", 1)
+            scene = surfaces.read(row["session"] or "", [{"type": "text", "text": text} for text in texts])
+            if len(texts) != 2 or scene.surface != "minecraft" or scene.actor is None:
+                continue
+            self.settle(scene)
+            self.store.run(
+                "UPDATE journal SET surface=?, actor=?, actor_name=?, people=?, heard=?, said='', source_id=? WHERE id=?",
+                (scene.surface, scene.actor_person, self.name_of(scene.actor_person), json.dumps(sorted(set(scene.people.values()))),
+                 scene.heard[:4000], scene.source_id, row["id"]))
+            self.store.run("DELETE FROM journal_fts WHERE rowid=?", (row["id"],))
+            self.store.run("INSERT INTO journal_fts(rowid,heard,said) VALUES(?,?,?)", (row["id"], scene.heard[:4000], ""))
+            fixed += 1
+        return fixed
+
     # ---- who is here ---------------------------------------------------------------
     @property
     def policy(self) -> str:

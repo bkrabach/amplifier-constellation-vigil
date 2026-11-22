@@ -250,6 +250,9 @@ def cmd_status(args: argparse.Namespace) -> None:
     for refusal in status.get("wake_refusals") or []:
         since = time.strftime("%Y-%m-%d %H:%M", time.localtime(refusal.get("since") or 0))
         print(f"warning: {refusal['place']} has not let a wake-up be set since {since} ({refusal['count']} {'try' if refusal['count'] == 1 else 'tries'}): {refusal['reason']}. What is held for it waits until someone speaks there.")
+    for late in status.get("overdue") or []:
+        since = time.strftime("%Y-%m-%d %H:%M", time.localtime(late.get("since") or 0))
+        print(f"waiting: {late['count']} follow-up(s) held for {late['place']}, due since {since}, with no turn there to bring them up. They come up on the next message there.")
     print(f"decisions in 24h: {decisions['count']} ({decisions['ok']} answered, avg {decisions['avg_ms']} ms) via {', '.join(decisions['backends']) or 'rules only'}")
     for place in status["places"]:
         print(f"  {place['place_label'] or place['surface']:<40} {place['audience']:<8} {place['turns']} turn(s)")
