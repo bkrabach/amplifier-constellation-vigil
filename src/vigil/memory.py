@@ -605,8 +605,9 @@ class Memory:
                 ok = row["place"] == scene.place and audience_fits(origin, scene.audience)
             elif scope == "owner":
                 ok = scene.audience == "owner"
-            else:  # person: wherever I next talk with them, as long as that is no wider an audience
-                ok = row["person"] == scene.actor_person and (scene.audience == "owner" or row["place"] == scene.place or (origin == "group" and scene.audience in ("group", "dm")) or (origin == "dm" and scene.audience == "dm"))
+            else:  # person: the next time they speak where it was held, or when I talk with them alone.
+                # Another room is not that: it has other listeners, and what was held may be undoable there.
+                ok = row["person"] == scene.actor_person and (scene.audience == "owner" or row["place"] == scene.place or (origin in ("group", "dm") and scene.audience == "dm"))
             if ok:
                 out.append(dict(row))
         return out[:6]
