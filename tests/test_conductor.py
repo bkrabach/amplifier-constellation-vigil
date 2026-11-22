@@ -906,6 +906,13 @@ def test_a_loaded_game_session_is_asked_for_its_wake_tool_before_anyone_speaks(t
             daemon.store.meta_set(f"wake:{place}", "0")
             await mind.tend_wakes()
             assert json.loads(saved.read_text()) == {} and len(tools.calls) == calls
+            # The connector loads the session again with its new credential. It is asked at once,
+            # about the same request: it had accepted that one, and starts no second prompt for it.
+            tools.server = {**tools.server, "headers": [{"name": "Authorization", "value": "Bearer rotated"}]}
+            await client.conn.send_request("session/load", {"sessionId": sid, "cwd": config.workspace, "mcpServers": [tools.server]})
+            await mind.tend_wakes()
+            assert tools.calls[-1]["arguments"]["id"] == kept["id"] and len(tools.calls) == calls + 1 and tools.woken == [ident, kept["id"]]
+            assert json.loads(daemon.store.meta_get(f"wake-asked:{place}"))["state"] == "queued" and daemon.store.meta_get(f"wake-refused:{place}") is None
             await client.close()
         finally:
             daemon._stop.set()

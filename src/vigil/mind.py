@@ -459,6 +459,10 @@ class Mind:
                 self.tokens[token] = sid
             link.sessions.add(sid)
             self.servers[sid] = client_servers
+            for server in client_servers:
+                # A connector that sets a session up again may have been updated or given a
+                # new credential: what its tool server offered before is asked again.
+                self.wake_offered.pop(str(server.get("url") or ""), None)
             if isinstance(result, dict) and isinstance(result.get("configOptions"), list):
                 self.options[sid] = result["configOptions"]
             self.store.session_touch(sid, runtime=link.runtime.spec.name)
