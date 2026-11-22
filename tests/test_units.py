@@ -159,7 +159,7 @@ def test_a_game_chat_line_from_the_connector_that_plans_nothing():
     scene = surfaces.read("s", game_chat_blocks(line))
     assert (scene.surface, scene.audience, scene.mode, scene.place) == ("minecraft", "group", "direct", "minecraft:world")
     assert scene.actor == Who("minecraft", "Steve42", "Steve42", False) and scene.heard == "Polaris, is the {door} wired?"
-    assert scene.source_id == "minecraft:c-81" and scene.reply_hidden and scene.participants == [] and scene.overheard == []
+    assert scene.source_id == "minecraft:c-81" and scene.reply_hidden and scene.every_line and scene.participants == [] and scene.overheard == []
     peer = surfaces.read("s", game_chat_blocks({**line, "source": "agent", "username": "Maker", "server_attribution": None}))
     assert peer.actor == Who("minecraft", "Maker", "Maker", True) and peer.reply_hidden
     # Words it cannot place name nobody, and the reader still never raises.
@@ -172,7 +172,7 @@ def test_a_game_chat_line_from_the_connector_that_plans_nothing():
     # The earlier prompt is still read as before, and its ending text was shown for a person's own message.
     world = {"messages": [{"id": 1, "username": "Steve42", "message": "come build", "whisper": False, "source": "human"}], "world": {"username": "Polaris"}}
     earlier = surfaces.read("s", [{"type": "text", "text": "Current adapter permission policy for this turn:\n{}"}, {"type": "text", "text": "play.\n" + json.dumps(world)}])
-    assert earlier.surface == "minecraft" and earlier.heard == "come build" and not earlier.reply_hidden
+    assert earlier.surface == "minecraft" and earlier.heard == "come build" and not earlier.reply_hidden and not earlier.every_line
 
 
 def test_only_an_explicit_answer_says_a_wake_request_was_not_queued():
@@ -201,7 +201,7 @@ def test_the_turn_the_game_connector_starts_when_asked_for_one():
     request = {"id": "vigil-0123456789abcdef", "source": "agent_wake", "note": "Something you are holding for this conversation is due.", "time": "2026-11-22T12:00:00.000Z"}
     scene = surfaces.read("s", game_chat_blocks(request, opening))
     assert (scene.surface, scene.audience, scene.mode, scene.place) == ("minecraft", "group", "wake", "minecraft:world")
-    assert scene.wake == "vigil-0123456789abcdef" and scene.reminder and scene.reply_hidden
+    assert scene.wake == "vigil-0123456789abcdef" and scene.reminder and scene.reply_hidden and scene.every_line
     assert scene.heard == "" and scene.actor is None and scene.source_id is None
     # A request it cannot read is still that kind of turn, and names no asker.
     for odd in ({**request, "source": "human"}, {**request, "id": 7}, {**request, "id": ""}, {}):
@@ -713,6 +713,52 @@ def test_a_wake_up_turn_shows_what_it_is_for_whole_and_as_something_to_do(memory
     assert plan in woken and len(surfaced) == 1
 
 
+def test_where_every_line_starts_a_turn_the_brief_says_a_reply_needs_no_follow_up(memory: Memory):
+    """A live agent, waiting in the game for its owner to answer in chat, set itself a
+    follow-up every half hour to look for the answer. The connector starts a turn for
+    every public line, so the answer would have brought it back by itself."""
+    game = scene_for(memory, "minecraft:world", "group", Who("minecraft", "Wren", "Wren"))
+    game.speech_by_tool = game.every_line = True
+    said = "Every public line from anyone else here starts a turn for you"
+    assert said in compose(game, memory, memory.config)[0]
+    assert said in compose(dataclasses.replace(game, actor=None, wake="vigil-1", mode="wake"), memory, memory.config)[0]
+    planned = scene_for(memory, "minecraft:world", "group", Who("minecraft", "Wren", "Wren"))  # the connector before its PR 162 chose which lines became turns
+    assert said not in compose(planned, memory, memory.config)[0] and said not in compose(dataclasses.replace(planned, mode="continuation"), memory, memory.config)[0]
+    room = scene_for(memory, "slack:T1:C1", "group", Who("slack:T1", "U2", "Dana"))
+    assert said not in compose(room, memory, memory.config)[0]
+
+
+def test_what_is_already_held_for_a_place_is_shown_there_before_it_is_due(memory: Memory):
+    """A live agent held two follow-ups for one search in a game world, the older with a
+    plan it had since replaced. Nothing showed it what it already held until that came
+    due, so it could neither avoid the second nor close the first."""
+    game = scene_for(memory, "minecraft:world", "group", Who("minecraft", "Wren", "Wren"))
+    later = memory.thought_add(game, "followup", "Search north of the lake for red mushrooms. " + "Keep to dry land. " * 20, time.time() + 7200, "here")
+    daily = memory.thought_add(game, "followup", "Count the stews in the barrel.", time.time() + 600, "here", every_seconds=86400)
+    due = memory.thought_add(game, "followup", "Ask Wren whether the stew is done.", 0, "here")
+    text, surfaced = compose(game, memory, memory.config)
+    assert surfaced == [due]  # only what is due is handed over, and only that is settled by the turn
+    held = [line for line in text.split("\n") if line.startswith(f"- (#{later},") or line.startswith(f"- (#{daily},")]
+    assert "Already held for this place and not due yet; each waits for its own time." in text and len(held) == 2
+    assert held[0].startswith(f"- (#{daily}, repeats, next due in ") and held[1].startswith(f"- (#{later}, due in 1 h) Search north of the lake")
+    assert held[1].endswith("…") and len(held[1]) < 240  # a reminder of what it is, not the plan again
+    memory.thoughts_delivered(surfaced, game.session)
+    assert {row["id"] for row in memory.thoughts_pending()} == {later, daily}
+    # another room, and a private conversation with the same person, see none of it
+    room = scene_for(memory, "slack:T1:C1", "group", Who("slack:T1", "U2", "Dana"))
+    alone = scene_for(memory, "minecraft:whisper", "dm", Who("minecraft", "Wren", "Wren"))
+    for elsewhere in (room, alone):
+        assert "Already held" not in compose(elsewhere, memory, memory.config)[0]
+    # what the owner sent here stays in its own block, and a fourth is not listed
+    for number in range(3):
+        memory.thought_add(game, "followup", f"Later thing {number}.", time.time() + 9000 + number, "here")
+    sent = memory.thought_add(game, "followup", "Direct the build here.", time.time() + 60, "here", data={"sent_by_owner": True})
+    ahead = [row["id"] for row in memory.thoughts_ahead(game)]
+    assert len(ahead) == 3 and sent not in ahead
+    memory.thought_cancel(game, later)
+    assert later not in {row["id"] for row in memory.thoughts_ahead(game)}
+
+
 # ---- small pieces ------------------------------------------------------------------
 
 def test_only_a_real_mind_tool_request_is_approved_automatically():
@@ -842,7 +888,8 @@ def test_the_owner_can_send_the_agent_to_another_place_with_something_to_do(memo
     text, surfaced = compose(test_world, memory, memory.config)
     assert "To bring up now" in text and "Count the iron" in text
     memory.thoughts_delivered(surfaced, "s")
-    assert "Count the iron" not in compose(test_world, memory, memory.config)[0]
+    between = compose(test_world, memory, memory.config)[0]  # not raised again until it is due, and listed as held
+    assert "To bring up now" not in between and "repeats, next due in 59 min) Count the iron in the chest." in between
     memory.thought_cancel(call, surfaced[0])
     # a name that fits two places, or none, is refused with the names to choose from
     with pytest.raises(ToolError) as refused:

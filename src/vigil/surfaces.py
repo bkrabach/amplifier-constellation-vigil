@@ -72,6 +72,9 @@ class Scene:
     #: The experience shows nobody the text that ends a turn: what the agent says
     #: reaches people only through the experience's speech tools.
     speech_by_tool: bool = False
+    #: The experience starts a turn for every public line anyone else says in this
+    #: place, so the agent is present for an answer without asking to be woken.
+    every_line: bool = False
     #: Other messages the experience showed with this turn that the agent did not take
     #: part in: (source id, who, text, source time or 0). Memory keeps them, so a room's
     #: history is the same from every place the agent later looks from.
@@ -324,7 +327,7 @@ def _minecraft_chat(scene: Scene, texts: list[str]) -> None:
     the message as JSON. Every public line from anyone else starts a turn of its own, so
     nothing else comes with it: no players, no recent conversation, no whisper. The
     connector plans nothing and posts nothing: the agent speaks with chat or tell."""
-    scene.speech_by_tool = True
+    scene.speech_by_tool = scene.every_line = True
     body = texts[-1] if len(texts) > 1 else ""
     at = body.find("{")
     message = _json_tail(body, at) if at >= 0 else None

@@ -1,6 +1,6 @@
 """What does a real model do in a wake-up turn for a follow-up that is work?
 
-    python tests/wake_turn.py LABEL ENGINE_BINARY KEYREF [RUNS]
+    python tests/wake_turn.py LABEL ENGINE_BINARY KEYREF [RUNS [PLAN_FILE [AHEAD_FILE]]]
 
 A throwaway Vigil home on the real native engine, a stand-in for the game connector's
 tool server (observe, find, move, gather, chat, tell, wake) and a client that plays the
@@ -9,8 +9,12 @@ prompt when Vigil's scheduler asks for one. The agent holds a plan for a search 
 world; the stand-in has what it looks for about 130 blocks away in every direction.
 
 Prints one JSON line per run: the tools the model called in the wake-up turn, where it
-ended, and what it holds afterwards. LABEL is copied into each line, to tell two
-versions of a wording apart: check out one, run, check out the other, run again.
+ended, and what it holds afterwards, with the minutes until each is due. LABEL is copied
+into each line, to tell two versions of a wording apart: check out one, run, check out
+the other, run again. PLAN_FILE holds another follow-up to play in place of the search,
+for instance one that waits for somebody's answer. AHEAD_FILE holds a second follow-up
+for the same place that is not due for two hours, for instance an earlier plan the due
+one has overtaken.
 KEYREF names the model credential as `tests/runtime_matrix.py` does (an environment
 variable, or `file:PATH#NAME`). Each run makes a handful of real model requests.
 
@@ -38,6 +42,7 @@ from aiohttp import web  # noqa: E402
 PLAN = ("Red mushrooms for the cook's stew: none within 48 blocks of the shop (checked this morning). Eight more stews are still needed; the barrel is at (-506,64,-553). "
         "Next: travel in bounded steps (about 60 blocks at a time) in one direction, running a red_mushroom find at each stop. "
         "Bring back what you find to the barrel and leave some to spread. The door is still waiting on its builder's design; leave it alone.")
+AHEAD = ""
 START = (-484, 64, -537)
 PATCHES = [(-484 + dx, 64, -537 + dz) for dx, dz in ((-130, 0), (130, 0), (0, -130), (0, 130), (-128, 3), (127, -2), (2, -127), (-3, 128))]
 OP = {"operation_id": {"type": "string", "description": "Durable ID for this intent. Use operation_status after uncertainty."}}
@@ -177,6 +182,9 @@ async def one(label: str, engine: str, keyref: str, base: Path, number: int) -> 
         place, place_label = db.execute("SELECT place, place_label FROM sessions WHERE id=?", (sid,)).fetchone()
         db.execute("INSERT INTO thoughts(ts, kind, text, place, place_label, audience, scope, due, state, origin_session, data) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                    (time.time() - 7200, "followup", PLAN, place, place_label, "group", "here", time.time() - 5, "pending", sid, "{}"))
+        if AHEAD:
+            db.execute("INSERT INTO thoughts(ts, kind, text, place, place_label, audience, scope, due, state, origin_session, data) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                       (time.time() - 10800, "followup", AHEAD, place, place_label, "group", "here", time.time() + 7200, "pending", sid, "{}"))
         db.commit()
         db.close()
         ident = await asyncio.wait_for(game.woken.get(), 90)  # Vigil's scheduler asks within twenty seconds
@@ -186,7 +194,7 @@ async def one(label: str, engine: str, keyref: str, base: Path, number: int) -> 
         result = await asyncio.wait_for(client.conn.send_request("session/prompt", {"sessionId": sid, "prompt": [
             permissions(sid), {"type": "text", "text": "Agent-requested wake. Nobody spoke in the game.\n" + json.dumps(request)}]}), 600)
         db = sqlite3.connect(home / "state.sqlite3")
-        thoughts = db.execute("SELECT state, substr(text,1,90) FROM thoughts ORDER BY id").fetchall()
+        thoughts = db.execute("SELECT state, round((due - ?) / 60), substr(text,1,90) FROM thoughts ORDER BY id", (time.time(),)).fetchall()
         event = db.execute("SELECT result FROM events WHERE kind='prompt' ORDER BY id DESC LIMIT 1").fetchone()
         db.close()
         names = [name for name, _ in game.calls]
@@ -212,6 +220,11 @@ async def one(label: str, engine: str, keyref: str, base: Path, number: int) -> 
 async def main() -> None:
     label, engine, keyref = sys.argv[1], sys.argv[2], sys.argv[3]
     runs = int(sys.argv[4]) if len(sys.argv) > 4 else 1
+    global PLAN, AHEAD
+    if len(sys.argv) > 5:
+        PLAN = Path(sys.argv[5]).read_text().strip()
+    if len(sys.argv) > 6:
+        AHEAD = Path(sys.argv[6]).read_text().strip()
     base = Path(tempfile.mkdtemp(prefix="wb-"))
     try:
         for number in range(1, runs + 1):
