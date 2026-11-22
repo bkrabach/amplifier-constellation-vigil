@@ -42,9 +42,13 @@ class MinecraftBridge:
     async def ask(self, http: aiohttp.ClientSession, text: str, actor_id: str, actor_label: str, call_id: str) -> dict[str, Any]:
         """Submit the caller's words and wait briefly for the reply recorded for them.
 
-        Returns {"state": "replied" | "working" | "unavailable", "text": str}. A
-        reply is what the game session said to this caller; it is not proof that
-        physical work in the world finished.
+        Returns {"state": ..., "text": str}. "replied" carries what the game session
+        said to this caller; it is not proof that physical work in the world finished.
+        Without a reply the state is what the connector last said of the words:
+        "working" (a turn has them), "waiting" (still queued: nothing has taken them
+        up), "ended" (a turn had them and ended without a reply for the caller),
+        "passed" (accepted, and nothing more is known), "unknown" (sent, and the
+        connector's answer was lost) or "unavailable" (refused or not reached).
         """
         source = {
             "version": 1, "request_id": str(uuid.uuid4()), "call_id": call_id or "call", "intent_id": str(uuid.uuid4()), "revision": "1",
@@ -58,22 +62,36 @@ class MinecraftBridge:
                 if response.status >= 300:
                     return {"state": "unavailable", "text": ""}
                 queued = await response.json()
-            query = {"version": 1, "requests": [{"request_id": queued["request_id"], "source": source}]}
-            deadline = time.monotonic() + self.wait
-            while time.monotonic() < deadline:
-                await asyncio.sleep(0.7)
+        except aiohttp.ClientConnectorError:
+            return {"state": "unavailable", "text": ""}  # nothing was sent
+        except (TimeoutError, aiohttp.ClientError, ValueError):
+            return {"state": "unknown", "text": ""}  # sent, and the answer was lost
+        # From here the words are with the connector. Whatever goes wrong while waiting
+        # for a reply, they were passed on, and the caller must not be told otherwise.
+        request_id = queued.get("request_id") if isinstance(queued, dict) else None
+        if not isinstance(request_id, str) or not request_id:
+            return {"state": "passed", "text": ""}
+        query = {"version": 1, "requests": [{"request_id": request_id, "source": source}]}
+        delivery = ""
+        deadline = time.monotonic() + self.wait
+        while time.monotonic() < deadline:
+            await asyncio.sleep(0.7)
+            try:
                 async with http.post(f"{self.url}/source-outcomes", json=query, headers=self._headers(), timeout=limit) as response:
                     if response.status >= 300:
                         continue
                     outcome = ((await response.json()).get("outcomes") or [{}])[0]
-                replies = [r.get("text", "") for r in outcome.get("source_replies") or [] if r.get("text")]
-                if replies:
-                    return {"state": "replied", "text": "\n".join(replies)}
-                if outcome.get("delivery") in ("terminal", "interrupted") or outcome.get("terminal_at"):
-                    break
-            return {"state": "working", "text": ""}
-        except (TimeoutError, aiohttp.ClientError, KeyError, ValueError):
-            return {"state": "unavailable", "text": ""}
+                if not isinstance(outcome, dict):
+                    continue
+            except (TimeoutError, aiohttp.ClientError, ValueError):
+                continue
+            replies = [r.get("text", "") for r in outcome.get("source_replies") or [] if isinstance(r, dict) and r.get("text")]
+            if replies:
+                return {"state": "replied", "text": "\n".join(replies)}
+            delivery = "terminal" if outcome.get("terminal_at") else str(outcome.get("delivery") or delivery)
+            if delivery in ("terminal", "interrupted"):
+                break
+        return {"state": {"admitted": "working", "queued": "waiting", "terminal": "ended", "interrupted": "ended"}.get(delivery, "passed"), "text": ""}
 
 
 def load(config: Config) -> MinecraftBridge | None:

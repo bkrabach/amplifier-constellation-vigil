@@ -676,15 +676,29 @@ class Mind:
                 "sessionUpdate": "agent_message_chunk", "messageId": secrets.token_hex(8), "content": {"type": "text", "text": result["text"]}}})
             self.memory.journal_add(scene, result["text"], f"passed to {self.bridge.label}", "end_turn")
             return {"stopReason": "end_turn", "_meta": {VIGIL_META: {"routed": "minecraft"}}}
-        if result["state"] == "working":
-            extras.setdefault("lines", []).append(
-                f"You already passed the caller's words to your own presence in {self.bridge.label}, and it is acting on them now. It has not replied yet. "
-                "Tell the caller in a few words that you are on it. Do not send the request again.")
-        elif result["state"] == "unavailable":
-            extras.setdefault("lines", []).append(
-                f"The caller's words sound like they are about {self.bridge.label}. Your own presence there could not be reached just now, so nothing was passed to it. "
-                "If they asked for something to happen there, tell them plainly that you cannot reach it at the moment. Do not say it is under way.")
+        line = self._PASSED_ON.get(result["state"])
+        if line:
+            extras.setdefault("lines", []).append(line.format(place=self.bridge.label))
         return None
+
+    #: What the call session is told when the game presence gave no reply in time, by
+    #: what the connector said had become of the caller's words. Only "working" may say
+    #: that anything is under way. The game connector since its PR 162 accepts such
+    #: words and gives them to nobody, and "it is acting on them now" was said of that.
+    _PASSED_ON = {
+        "working": "You already passed the caller's words to your own presence in {place}, and it is acting on them now. It has not replied yet. "
+                   "Tell the caller in a few words that you are on it. Do not send the request again.",
+        "waiting": "You passed the caller's words to your own presence in {place}. They are still waiting there: it has not taken them up, and nothing says when it will. "
+                   "Tell the caller that their request is waiting and has not been started. Do not say it is under way, and do not send it again.",
+        "ended": "You passed the caller's words to your own presence in {place}. Its turn on them ended without a reply for the caller. "
+                 "Tell the caller you passed it on and have heard nothing back. Do not say it is done, and do not send it again.",
+        "passed": "You passed the caller's words to your own presence in {place}. Nothing shows yet whether it has taken them up. "
+                  "Tell the caller you passed it on and cannot yet say that it has started. Do not send it again.",
+        "unknown": "You tried to pass the caller's words to your own presence in {place}, and cannot tell whether they arrived. "
+                   "Tell the caller that plainly. Do not say it is under way.",
+        "unavailable": "The caller's words sound like they are about {place}. Your own presence there could not be reached just now, so nothing was passed to it. "
+                       "If they asked for something to happen there, tell them plainly that you cannot reach it at the moment. Do not say it is under way.",
+    }
 
     def _label(self, scene: Scene) -> None:
         """Replace generic place labels with the names the owner configured."""

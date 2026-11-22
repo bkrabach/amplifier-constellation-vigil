@@ -438,6 +438,60 @@ wait_seconds = 5
 ''')
 
 
+@pytest.mark.parametrize("outcome, said, unsaid", [
+    # The game connector since its PR 162: the words are accepted and given to nobody.
+    ({"delivery": "queued"}, "still waiting there: it has not taken them up", "acting on them now"),
+    ({"delivery": "admitted"}, "it is acting on them now", "waiting there"),
+    ({"delivery": "admitted", "terminal_at": "2026-11-22T12:00:00Z"}, "ended without a reply for the caller", "acting on them now"),
+    ({"delivery": "unknown"}, "Nothing shows yet whether it has taken them up", "acting on them now"),
+    (None, "Nothing shows yet whether it has taken them up", "nothing was passed"),
+])
+def test_spoken_game_request_without_a_reply_says_what_became_of_the_words(run, outcome, said, unsaid):
+    """The game presence gave no reply in time. The call session is told what the
+    connector said had become of the caller's words, and only words a turn has taken up
+    are called under way. A failure while waiting does not undo that they were passed."""
+    from aiohttp import web
+
+    bridge_port = free_port()
+
+    async def task(request):
+        return web.json_response({"queued": True, "request_id": "q1", "source_request_id": (await request.json())["source"]["request_id"]})
+
+    async def outcomes(request):
+        if outcome is None:
+            return web.Response(status=500)
+        return web.json_response({"version": 1, "outcomes": [{**outcome, "source_replies": []}]})
+
+    async def scenario(config, daemon):
+        config.write_secret("mc-caller", "t" * 40)
+        app = web.Application()
+        app.add_routes([web.post("/task", task), web.post("/source-outcomes", outcomes)])
+        runner = web.AppRunner(app)
+        await runner.setup()
+        await web.TCPSite(runner, "127.0.0.1", bridge_port).start()
+        try:
+            client = Client()
+            await client.attach(config)
+            sid = (await client.conn.send_request("session/new", {"cwd": config.workspace, "mcpServers": []}))["sessionId"]
+            call = ("The live voice conversation delegated help at 900ms. You are the same agent.\n\nThis new request's delegation_id is d1.\n\n"
+                    "Current human source (exact):\ncan you bring me some torches, I am down in the cave\n\nRecent conversation, for references: none")
+            meta = {"com.microsoft.amplifier.conversations": {"conversationId": "call-1", "author": "olive", "messageId": "m"}}
+            result = await client.conn.send_request("session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": call}], "_meta": meta})
+            assert result["stopReason"] == "end_turn" and "routed" not in json.dumps(result)
+            brief = json.loads((config.home / "fake-state.json").read_text())[sid]["prompts"][0][-1]["text"]
+            assert said in brief and unsaid not in brief and "the Minecraft world" in brief
+            await client.close()
+        finally:
+            await runner.cleanup()
+
+    run(scenario, extra=f'''
+[bridges.minecraft]
+url = "http://127.0.0.1:{bridge_port}"
+secret = "mc-caller"
+wait_seconds = 2
+''')
+
+
 def test_spoken_game_request_says_so_when_the_game_presence_is_down(run):
     """Nothing listens where the game presence should be. The call session answers, and
     its brief says the words were not passed on, so the caller is not told it is under way."""
