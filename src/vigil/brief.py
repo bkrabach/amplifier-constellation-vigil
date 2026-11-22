@@ -48,6 +48,17 @@ def ago(ts: float) -> str:
     return f"{int(seconds // 86400)} d ago"
 
 
+def until(ts: float) -> str:
+    seconds = max(0, ts - time.time())
+    if seconds < 90:
+        return "in a minute"
+    if seconds < 3600:
+        return f"in {int(seconds // 60)} min"
+    if seconds < 86400:
+        return f"in {int(seconds // 3600)} h"
+    return f"in {int(seconds // 86400)} d"
+
+
 def local_now(config: Config) -> datetime.datetime:
     try:
         zone = ZoneInfo(config.timezone)
@@ -80,7 +91,7 @@ def _names_here(scene: Scene, memory: Memory) -> list[str]:
 #: What goes first when a brief is over its budget. Recall and news from other places
 #: are the least certain to matter here; who is present, what is due and the owner's
 #: standing instructions are never cut.
-_TRIM_ORDER = ("recall", "elsewhere", "people", "activity", "notebook")
+_TRIM_ORDER = ("recall", "elsewhere", "people", "activity", "notebook", "ahead")
 
 
 def _fit(rows: list[tuple[str, bool, str]], budget: int) -> str:
@@ -140,6 +151,11 @@ def compose(scene: Scene, memory: Memory, config: Config, extras: dict[str, Any]
         if scene.reply_hidden:
             add("Here you speak with chat or tell. The reply that ends this turn is shown to nobody, so leave it empty: "
                 "it is not a place for notes about what you decided or did.")
+            if scene.every_line:
+                # A live agent waiting for its owner's answer woke itself every half hour
+                # to look at the chat, about 98,000 tokens written to the cache each time.
+                add("Every public line from anyone else here starts a turn for you, so you will be here when someone answers. "
+                    "Hold a follow-up for what you would do if nobody speaks, not to look for a reply.")
         else:
             add("Your reply here is spoken in public chat, unless you use chat or tell this turn: after either, the reply is shown to nobody, "
                 "so leave it empty. It is never a place for notes about what you decided or did.")
@@ -218,6 +234,15 @@ def compose(scene: Scene, memory: Memory, config: Config, extras: dict[str, Any]
             # In the turn it woke, a follow-up is shown whole: it is the plan for the turn.
             room = OWNER_WORK_CHARS if sent or thought["kind"] == "task" or scene.wake else 320
             add(f"- (#{thought['id']}, {label}{for_whom}, {ago(thought['ts'])}) {clip(thought['text'], room)}")
+
+    ahead = memory.thoughts_ahead(scene)
+    if ahead:
+        # A live agent held two follow-ups for one search, the older with a plan it had
+        # since replaced: nothing showed it what it already held until that came due.
+        add("Already held for this place and not due yet; each waits for its own time. Do not hold the same thing twice; when one is settled or overtaken, "
+            "close it with mind_cancel (kind follow_up, its id):", "ahead", True)
+        for thought in ahead:
+            add(f"- (#{thought['id']}, {'repeats, next ' if thought['every_seconds'] else ''}due {until(thought['due'])}) {clip(thought['text'], 200)}", "ahead")
 
     for line in extras.get("lines") or []:
         add(line)

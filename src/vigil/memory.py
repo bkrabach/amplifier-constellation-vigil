@@ -638,6 +638,16 @@ class Memory:
                 out.append(dict(row))
         return out[:6]
 
+    def thoughts_ahead(self, scene: Scene, limit: int = 3) -> list[dict[str, Any]]:
+        """Follow-ups held for this place that are not due yet: what the agent has already
+        asked itself to come back to here. The brief shows them so it does not hold one
+        thing twice or leave standing a plan that events have overtaken."""
+        if not scene.place:
+            return []
+        rows = self.store.q("SELECT * FROM thoughts WHERE state='pending' AND kind='followup' AND scope='here' AND place=? AND due>? ORDER BY due LIMIT 20",
+                            (scene.place, now()))
+        return [dict(row) for row in rows if audience_fits(row["audience"], scene.audience) and not owner_work(row)][:limit]
+
     def thoughts_pending(self, place: str | None = None) -> list[dict[str, Any]]:
         if place:
             rows = self.store.q("SELECT * FROM thoughts WHERE state='pending' AND place=? ORDER BY due", (place,))
