@@ -69,6 +69,9 @@ class Scene:
     reminder: bool = False
     #: The source's own id for the message that started this turn, when it has one.
     source_id: str | None = None
+    #: The experience shows nobody the text that ends a turn: what the agent says
+    #: reaches people only through the experience's speech tools.
+    speech_by_tool: bool = False
     #: Other messages the experience showed with this turn that the agent did not take
     #: part in: (source id, who, text, source time or 0). Memory keeps them, so a room's
     #: history is the same from every place the agent later looks from.
@@ -82,6 +85,12 @@ class Scene:
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
+
+    @property
+    def reply_hidden(self) -> bool:
+        """Whether the text that ends this turn is shown to nobody. The game connector
+        showed it only for a person's own message before its PR 162, and never since."""
+        return self.speech_by_tool or (self.surface == "minecraft" and self.mode in ("ambient", "continuation"))
 
     @property
     def private(self) -> bool:
@@ -301,13 +310,41 @@ def _game_line(message: Any, self_handle: str | None) -> tuple[str, Who, str, fl
     return (f"minecraft:{message['id']}", Who("minecraft", who, who, source == "agent"), text[:4000], at)
 
 
+#: How the game connector opens a prompt: since its PR 162, and before it.
+GAME_CHAT, GAME_PLANNED = "Current Minecraft tool permissions:", "Current adapter permission policy for this turn:"
+
+
+def _minecraft_chat(scene: Scene, texts: list[str]) -> None:
+    """One public chat line, as the game connector sends it since its PR 162
+    (`adapter.py`, `deliver`): its tool permissions, then a line of guidance followed by
+    the message as JSON. Every public line from anyone else starts a turn of its own, so
+    nothing else comes with it: no players, no recent conversation, no whisper. The
+    connector plans nothing and posts nothing: the agent speaks with chat or tell."""
+    scene.speech_by_tool = True
+    body = texts[-1] if len(texts) > 1 else ""
+    at = body.find("{")
+    message = _json_tail(body, at) if at >= 0 else None
+    if not isinstance(message, dict) or not isinstance(message.get("username"), str) or not isinstance(message.get("message"), str):
+        scene.heard = body  # not the chat line this reader knows: keep the words, name nobody
+        return
+    who, source = message["username"], str(message.get("source") or "")
+    if who and source in ("human", "agent"):
+        scene.actor = Who("minecraft", who, who, source == "agent")
+    scene.heard = message["message"]
+    if message.get("id"):
+        scene.source_id = f"minecraft:{message['id']}"
+
+
 def _minecraft(scene: Scene, texts: list[str]) -> bool:
-    if not texts or not texts[0].startswith("Current adapter permission policy for this turn:"):
+    if not texts or not texts[0].startswith((GAME_CHAT, GAME_PLANNED)):
         return False
     scene.surface = "minecraft"
     scene.place = "minecraft:world"
     scene.place_label = "the Minecraft world"
     scene.audience = "group"
+    if texts[0].startswith(GAME_CHAT):
+        _minecraft_chat(scene, texts)
+        return True
     namespace = "minecraft"
     body = texts[-1]
     at = body.rfind('{"messages": ')

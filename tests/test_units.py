@@ -139,6 +139,65 @@ def test_minecraft_scene():
     assert [w.handle for w in scene.participants] == ["Steve42", "Maker"]
 
 
+def game_chat_blocks(message: dict, guidance: str = "Public Minecraft chat. To speak in the game use a Minecraft chat tool.\n") -> list[dict]:
+    """A prompt as the game connector builds it since its PR 162: `permission_context` in its
+    `acp_client.py`, `blocks` in `context_snapshot.py`, `public_message` and `deliver` in `adapter.py`."""
+    permissions = {"policy_revision": "9f" * 32, "session_id": "s", "active": True, "server": "minecraft", "allow_once_tools": ["chat", "dig", "tell"],
+                   "scope": "same connected ACP session and registered Minecraft tool; disabled during replay and maintenance"}
+    kept = {"com.microsoft.amplifier.context-snapshot": {"version": 1, "key": "minecraft:permission:" + "ab" * 32, "retainedText": "Historical adapter permission policy revision"}}
+    return [{"type": "text", "text": "Current Minecraft tool permissions:\n" + json.dumps(permissions), "_meta": kept},
+            {"type": "text", "text": guidance + json.dumps(message, ensure_ascii=False)}]
+
+
+def test_a_game_chat_line_from_the_connector_that_plans_nothing():
+    """From its PR 162 the game connector sends one public chat line per prompt and nothing
+    else. The reader knew only the earlier prompt, so on a live agent the first such turn
+    would have been read as a direct session with the whole prompt as what was heard."""
+    line = {"id": "c-81", "source": "human", "username": "Steve42", "message": "Polaris, is the {door} wired?", "time": "2026-11-22T12:00:00.000Z",
+            "server_attribution": {"kind": "server_player_uuid", "uuid": "0b0f6b0e-0000-4000-8000-000000000001", "signature_verified": True}}
+    scene = surfaces.read("s", game_chat_blocks(line))
+    assert (scene.surface, scene.audience, scene.mode, scene.place) == ("minecraft", "group", "direct", "minecraft:world")
+    assert scene.actor == Who("minecraft", "Steve42", "Steve42", False) and scene.heard == "Polaris, is the {door} wired?"
+    assert scene.source_id == "minecraft:c-81" and scene.reply_hidden and scene.participants == [] and scene.overheard == []
+    peer = surfaces.read("s", game_chat_blocks({**line, "source": "agent", "username": "Maker", "server_attribution": None}))
+    assert peer.actor == Who("minecraft", "Maker", "Maker", True) and peer.reply_hidden
+    # Words it cannot place name nobody, and the reader still never raises.
+    for odd in ({"id": "x", "source": "weather", "username": "Rain", "message": "it rains"}, {"id": "x", "username": 7, "message": "hi"}, {}):
+        strange = surfaces.read("s", game_chat_blocks(odd))
+        assert strange.surface == "minecraft" and strange.actor is None and strange.reply_hidden
+    assert surfaces.read("s", game_chat_blocks(line)[:1]).heard == ""  # the permissions alone are not something heard
+    broken = surfaces.read("s", [game_chat_blocks(line)[0], {"type": "text", "text": "Public Minecraft chat.\n{not json"}])
+    assert broken.surface == "minecraft" and broken.actor is None and broken.heard == "Public Minecraft chat.\n{not json"
+    # The earlier prompt is still read as before, and its ending text was shown for a person's own message.
+    world = {"messages": [{"id": 1, "username": "Steve42", "message": "come build", "whisper": False, "source": "human"}], "world": {"username": "Polaris"}}
+    earlier = surfaces.read("s", [{"type": "text", "text": "Current adapter permission policy for this turn:\n{}"}, {"type": "text", "text": "play.\n" + json.dumps(world)}])
+    assert earlier.surface == "minecraft" and earlier.heard == "come build" and not earlier.reply_hidden
+
+
+def test_game_turns_an_earlier_reader_misfiled_are_read_again(memory: Memory):
+    """On a live agent the connector update came first: 18 game turns in ten minutes were kept
+    as direct sessions with the prompt as what was heard and a zero-width space as said."""
+    line = {"id": "c-81", "source": "agent", "username": "Maker", "message": "the sticky pistons need two slimeballs", "time": "2026-11-22T12:00:00.000Z", "server_attribution": None}
+    blocks = game_chat_blocks(line)
+    place = "minecraft:constellation:tester|minecraft:world-1"
+    misread = Scene(session="s9", surface="direct", place=place, place_label="Minecraft — the world", audience="group", heard="\n\n".join(block["text"] for block in blocks))
+    memory.settle(misread)
+    row = memory.journal_add(misread, "\u200b", "", "end_turn")
+    other = Scene(session="s9", surface="direct", place="direct", audience="owner", heard="Current Minecraft tool permissions: what are they?")
+    memory.settle(other)
+    kept = memory.journal_add(other, "They are listed in the prompt.", "", "end_turn")
+    asker = scene_for(memory, place, "group", Who("minecraft", "Wren", "Wren"))
+    assert [hit for hit in memory.search(asker, "policy_revision", 5) if hit["kind"] == "journal"]  # the prompt's own JSON was searchable
+    assert memory.reread_game_rows() == 1 and memory.reread_game_rows() == 0
+    fixed = memory.store.one("SELECT * FROM journal WHERE id=?", (row,))
+    assert (fixed["surface"], fixed["heard"], fixed["said"], fixed["actor_name"], fixed["source_id"], fixed["place"]) == \
+        ("minecraft", "the sticky pistons need two slimeballs", "", "Maker", "minecraft:c-81", place)
+    assert dict(memory.store.one("SELECT is_agent, person FROM identities WHERE surface='minecraft' AND handle='Maker'")) == {"is_agent": 1, "person": fixed["actor"]}
+    assert not [hit for hit in memory.search(asker, "policy_revision", 5) if hit["kind"] == "journal"]
+    assert [hit["id"] for hit in memory.search(asker, "slimeballs", 5) if hit["kind"] == "journal"] == [row]
+    assert memory.store.one("SELECT said, surface FROM journal WHERE id=?", (kept,))["said"] == "They are listed in the prompt."  # a person's question about the words is not a game turn
+
+
 def test_minecraft_request_from_a_voice_call_is_private_and_spoken():
     source = {"actor": {"id": "olive", "label": "Olive"}, "audience": {"kind": "private", "experience": "voice-client", "id": "c1"}}
     world = {"messages": [{"id": 1, "username": "Agent on a voice call", "message": "come find me", "whisper": False, "source": "human",
@@ -282,21 +341,29 @@ def test_what_the_agent_said_in_a_game_is_what_its_speech_tools_delivered():
     call(turn, "c2", "conversation", {"limit": 5}, "completed")
     call(turn, "c3", "chat", {"text": "One more item: the kit is short of iron."}, "completed")
     final(turn, "I added the one item nobody had covered. The message went out, but I can't confirm it was delivered.")
-    assert turn.said("direct") == "One more item: the kit is short of iron." and turn.tools == ["chat", "conversation"]
+    assert turn.said(False) == "One more item: the kit is short of iron." and turn.tools == ["chat", "conversation"]
 
     refused = Turn(SPEECH_TOOLS["minecraft"])
     call(refused, "c1", "chat", {"text": "Here is the whole status."}, "failed")
     final(refused, "Here is the whole status.")
-    assert refused.said("direct") == ""  # a speech tool was tried, so the connector does not post the ending text either
+    assert refused.said(False) == ""  # a speech tool was tried, so the connector does not post the ending text either
 
     peer = Turn(SPEECH_TOOLS["minecraft"])
     call(peer, "c1", "tell", {"player": "Scribe", "text": "Plant your saplings on open grass.", "intent": "request"}, "completed")
-    assert peer.said("continuation") == "@Scribe Plant your saplings on open grass."
+    assert peer.said(True) == "@Scribe Plant your saplings on open grass."
+
+    # A model with nothing to say ends the turn with a zero-width space. On a live agent that
+    # counted as speaking, and a follow-up shown in that turn was marked as delivered.
+    from vigil.mind import spoken
+    assert spoken("\u200b") == "" and spoken(" \u200b\n\ufeff") == "" and spoken("\u200bfine\u200b") == "fine"
+    blank = Turn()
+    final(blank, "\u200b")
+    assert blank.said(False) == ""
 
     quiet = Turn(SPEECH_TOOLS["minecraft"])
     final(quiet, "Nothing has changed for me, so I am staying at my cabin.")
-    assert quiet.said("ambient") == "" and quiet.said("continuation") == ""
-    assert quiet.said("direct") == "Nothing has changed for me, so I am staying at my cabin."  # posted for a person's question
+    assert quiet.said(True) == ""
+    assert quiet.said(False) == "Nothing has changed for me, so I am staying at my cabin."  # posted for a person's question
 
     other = Turn(SPEECH_TOOLS["minecraft"])  # a tool of the same name on another server is not game speech
     other.tool({"sessionUpdate": "tool_call", "toolCallId": "c1", "status": "completed", "rawInput": {"server": "notes", "tool": "chat", "arguments": {"text": "x"}}})
@@ -782,6 +849,9 @@ def test_brief_says_a_game_reply_is_spoken_aloud(memory: Memory):
     game.mode = "ambient"  # after another player's message the connector shows the ending text to nobody
     text, _ = compose(game, memory, memory.config, {})
     assert "shown to nobody" in text and "spoken in public chat" not in text and "leave it empty" in text
+    game.mode, game.speech_by_tool = "direct", True  # the connector that posts nothing: every reply goes through chat or tell
+    text, _ = compose(game, memory, memory.config, {})
+    assert "shown to nobody" in text and "spoken in public chat" not in text and "standing next to you" in text
     whisper = scene_for(memory, "minecraft:world", "dm", Who("minecraft", "Wren", "Wren"))
     assert "spoken in public chat" not in compose(whisper, memory, memory.config, {})[0]
     channel = scene_for(memory, "slack:T1:C1", "group", Who("slack:T1", "U2", "Dana"))

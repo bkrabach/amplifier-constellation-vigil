@@ -175,9 +175,15 @@ def _claimed_tool(call: dict[str, Any], meta: dict[str, Any] | None = None) -> s
     return tool
 
 
+#: White space and the characters that print as nothing: zero-width space, joiners, word joiner, byte-order mark.
+_BLANK = " \t\r\n\x0b\x0c\u00a0\u200b\u200c\u200d\u2060\ufeff"
+
+
 def spoken(text: str) -> str:
     """What was actually said aloud, given the participation conventions experiences use."""
-    text = _FOLLOW_UP_LINE.sub("", text or "").strip()
+    # A model that must end a turn with some text and has nothing to say writes a
+    # zero-width space, which is not something anyone was told.
+    text = _FOLLOW_UP_LINE.sub("", text or "").strip(_BLANK)
     if not text or text == "[[PASS]]":
         return ""
     if text.startswith("{") and '"decision"' in text[:40]:
@@ -316,19 +322,19 @@ class Turn:
             if update["status"] == "completed":
                 self.spoke.append(text)
 
-    def said(self, mode: str) -> str:
+    def said(self, reply_hidden: bool) -> str:
         """What the people present were told this turn.
 
         With speech tools, that is what those tools delivered. The text that ends the
-        turn reaches people only when a person spoke to the agent directly and it tried
-        no speech tool; after another agent's message or its own activity the connector
-        shows that text to nobody, and memory must not record it as said."""
+        turn reaches people only where the experience posts it and the agent tried no
+        speech tool. Where it is shown to nobody (``Scene.reply_hidden``), memory must
+        not record it as said."""
         final = spoken(self.final())
         if not self.speech_tools:
             return final
         if self.spoke:
             return "\n".join(self.spoke)
-        return "" if self.speech_tried or mode in ("ambient", "continuation") else final
+        return "" if self.speech_tried or reply_hidden else final
 
     def final(self) -> str:
         for key in reversed(self.order):
@@ -617,7 +623,7 @@ class Mind:
             result = await link.runtime.request("session/prompt", params)
 
             stop = (result or {}).get("stopReason") or ""
-            said = turn.said(scene.mode)
+            said = turn.said(scene.reply_hidden)
             # A wake-up turn exists for what was due. If the agent ended it without trying
             # to speak, it chose not to raise it now; held open, the same thought would
             # wake the conversation again within seconds, one model call each time.
@@ -832,12 +838,26 @@ class Mind:
         if not offered and now() - asked >= 600:
             try:
                 offered = spec[1] in await list_tools(self.http, server, timeout=3.0)
+                if not offered:
+                    self._wake_gone(scene.place)  # the server answered, and the tool is not on it
             except Exception as error:
                 log.info("could not ask %s for its tools: %s", scene.surface, error)
             self.wake_offered[server["url"]] = (offered, now())
         if offered and self._wake_tool(sid, scene, held=True):
             # Kept during a hold too, so that releasing it needs no further turn there.
             self._remember_wake(sid, scene, server)
+
+    def _wake_gone(self, place: str) -> None:
+        """A place's connector no longer has a wake tool: stop asking it. What is held
+        for the place then waits for the next message there, as in any place without
+        one. On a live agent the game connector removed its reminder tool in an update,
+        and the daemon would otherwise have called the saved server every half hour for
+        a tool that was not there, with a warning in `vigil status` that never cleared."""
+        if place in self._saved_wakes() or self.store.meta_get(WAKE_REFUSED + place) is not None:
+            log.info("%s no longer has a wake tool; what is held for it waits for the next message there", place)
+        self._forget_wake(place)
+        self._wake_refused(place, None)
+        self.store.meta_set(f"wake:{place}", "0")
 
     async def _arm_wake(self, sid: str, scene: Scene, turn: Turn | None, outside: bool = False, tending: bool = False) -> bool:
         """Ask the experience to give this conversation another turn when something
@@ -913,6 +933,17 @@ class Mind:
             # connector's address, and the record is in the state database.
             http = re.search(r"HTTP \d{3}", str(error))
             reason = str(error) if isinstance(error, WakeRefused) else f"the connector answered {http.group(0)}" if http else f"the connector could not be reached ({type(error).__name__})"
+            if WAKE_TOOLS[scene.surface][2]:
+                # Some versions of this connector have no such tool, and a server may
+                # answer a call to a missing tool as an error or as a refusal. If it
+                # answers and does not list the tool, asking again is no use.
+                try:
+                    if tool not in await list_tools(self.http, server, timeout=3.0):
+                        self.wake_offered[server["url"]] = (False, now())
+                        self._wake_gone(scene.place)
+                        return False
+                except Exception:
+                    pass  # it cannot be asked just now: keep the failure below, and try again later
             count = self._wake_refused(scene.place, reason)
             log.info("wake not armed for %s (%d in a row): %s", scene.place, count, error)
             if "HTTP 401" in str(error) or "HTTP 403" in str(error):

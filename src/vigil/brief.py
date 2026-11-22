@@ -136,7 +136,7 @@ def compose(scene: Scene, memory: Memory, config: Config, extras: dict[str, Any]
     if scene.surface == "minecraft" and scene.mode not in ("ambient", "continuation"):
         add("People in the game are standing next to you in real time. Before something that takes more than a few seconds, say a word first so they know you are on it.")
     if scene.surface == "minecraft" and scene.audience == "group":
-        if scene.mode in ("ambient", "continuation"):
+        if scene.reply_hidden:
             add("Here you speak with chat or tell. The reply that ends this turn is shown to nobody, so leave it empty: "
                 "it is not a place for notes about what you decided or did.")
         else:
