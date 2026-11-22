@@ -529,8 +529,9 @@ class GameTools:
 
     def __init__(self, offer: bool = True, missing: str = "result", wake: bool = False) -> None:
         self.offer, self.refuse, self.calls, self.listed, self.token = offer, False, [], 0, "game-token"
-        #: The wake tool: the ids it started a prompt for, and how many answers to lose.
-        self.wake, self.woken, self.lose = wake, [], 0
+        #: The wake tool: the ids it started a prompt for, how many answers to lose, and
+        #: whether it fails after admitting a request (an error that is not a refusal).
+        self.wake, self.woken, self.lose, self.broken = wake, [], 0, False
         #: Awaited with the id while a wake request is being handled, before it is answered.
         self.during = None
         #: How a call to a tool that is not there is answered: as a tool result marked as an
@@ -562,8 +563,9 @@ class GameTools:
         self.calls.append(body["params"])
         if body["params"].get("name") == "wake" and self.wake:
             asked = body["params"]["arguments"]["id"]
-            if self.refuse:
-                return result({"content": [{"type": "text", "text": "Wake unavailable: explicit_stop"}], "isError": True})
+            if self.refuse and asked not in self.woken:
+                # Said before anything is queued: no prompt was or will be sent for this id.
+                return result({"content": [{"type": "text", "text": json.dumps({"queued": False, "id": asked, "reason": "Wake unavailable: explicit_stop"})}], "isError": True})
             if asked not in self.woken:
                 self.woken.append(asked)  # the connector sends its prompt for this id, once
                 if self.during:
@@ -571,6 +573,8 @@ class GameTools:
             if self.lose:
                 self.lose -= 1
                 return web.Response(status=500)  # accepted, and the answer never arrives
+            if self.broken:
+                return result({"content": [{"type": "text", "text": "Internal error"}], "isError": True})  # admitted, then something failed
             return result({"content": [{"type": "text", "text": json.dumps({"queued": True, "id": asked})}]})
         if body["params"].get("name") == "follow_up" and not self.offer:
             if self.missing == "result":
@@ -739,7 +743,9 @@ def test_vigil_keeps_the_time_where_the_game_only_sends_the_prompt(run):
         await daemon.mind.tend_wakes()
         assert [call["name"] for call in tools.calls] == ["wake"]
         first = tools.calls[0]["arguments"]
-        assert set(first) == {"id", "note"} and first["id"].startswith("vigil-") and asked() == {"id": first["id"], "at": asked()["at"], "state": "queued"}
+        assert set(first) == {"id", "note"} and first["id"].startswith("vigil-")
+        held = daemon.store.one("SELECT id FROM thoughts")["id"]
+        assert {key: asked()[key] for key in ("id", "state", "for", "open")} == {"id": first["id"], "state": "queued", "for": [held], "open": []}
 
         # A wake prompt under an id Vigil did not ask with is not Vigil's wake-up: the agent
         # asked for it itself, or a client made one up. Staying quiet in it settles nothing.
@@ -785,7 +791,8 @@ def test_vigil_keeps_the_time_where_the_game_only_sends_the_prompt(run):
         await daemon.mind.tend_wakes()
         assert len(tools.calls) == 3
 
-        # A refusal is an answer: nothing was queued, so the next request has a new id, later.
+        # The connector says it did not and will not send one (`queued: false`). Only that
+        # allows a new id for the same work, and it is asked for later.
         daemon.store.meta_set(f"wake:{scene.place}", "0")
         tools.refuse = True
         await daemon.mind.tend_wakes()
@@ -795,14 +802,41 @@ def test_vigil_keeps_the_time_where_the_game_only_sends_the_prompt(run):
         tools.refuse = False
         daemon.store.meta_set(f"wake:{scene.place}", "0")
         await daemon.mind.tend_wakes()
-        assert tools.calls[-1]["arguments"]["id"] not in (first["id"], lost, refused) and asked()["state"] == "queued"
+        again = tools.calls[-1]["arguments"]["id"]
+        assert again not in (first["id"], lost, refused) and asked()["state"] == "queued"
         assert daemon.store.meta_get(f"wake-refused:{scene.place}") is None
 
-        # Accepted, and its prompt is fifteen minutes overdue: that one is lost, and a new one is asked for.
-        record = asked()
-        daemon.store.meta_set(f"wake-asked:{scene.place}", json.dumps({**record, "at": time.time() - 901}))
+        # Accepted, and no prompt after fifteen minutes, or after any wait: the connector
+        # promises one prompt per id and no time. The same id is asked about, never a new
+        # one, and then only every half hour.
+        daemon.store.meta_set(f"wake-asked:{scene.place}", json.dumps({**asked(), "again": time.time() - 1}))
         await daemon.mind.tend_wakes()
-        assert tools.calls[-1]["arguments"]["id"] != record["id"] and len(tools.calls) == 6
+        assert tools.calls[-1]["arguments"]["id"] == again and len(tools.calls) == 6 and tools.woken == [first["id"], lost, again]
+        assert 1790 <= asked()["again"] - time.time() <= 1805
+        # An error that is not a refusal proves nothing about a request that may have been admitted: the same id again.
+        tools.broken = True
+        daemon.store.meta_set(f"wake-asked:{scene.place}", json.dumps({**asked(), "again": 0}))
+        await daemon.mind.tend_wakes()
+        assert tools.calls[-1]["arguments"]["id"] == again and asked()["state"] == "unknown"
+        assert json.loads(daemon.store.meta_get(f"wake-refused:{scene.place}"))["reason"] == "Internal error"
+        tools.broken = False
+
+        # Other work comes due while that prompt is still out: a request of its own. The
+        # earlier id stays Vigil's, so its prompt is recognised whenever it comes.
+        daemon.memory.thought_add(scene, "followup", "Ask about the windows.", 0)
+        daemon.store.meta_set(f"wake:{scene.place}", "0")
+        await daemon.mind.tend_wakes()
+        newer = tools.calls[-1]["arguments"]["id"]
+        assert newer != again and asked()["id"] == newer and asked()["open"] == [again]
+        await prompt(game_wake(newer, test="stay-silent"))  # it shows everything due, and the quiet agent settles it
+        assert [row["state"] for row in daemon.store.q("SELECT state FROM thoughts ORDER BY id")] == ["delivered"] * 3
+        assert asked() == {"open": [again]}
+        # The delayed prompt arrives at last, with nothing left to deliver: answered without the model.
+        turns = model_turns()
+        assert await prompt(game_wake(again)) == {"stopReason": "end_turn", "_meta": {"dev.vigil": {"wake": "quiet"}}}
+        assert model_turns() == turns and asked() == {}
+        await daemon.mind.tend_wakes()
+        assert len(tools.calls) == 8
         await client.close()
         await tools.stop()
     run(scenario)

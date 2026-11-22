@@ -258,12 +258,29 @@ def refusal_words(result: dict[str, Any]) -> str:
             continue
         try:
             inner = json.loads(text)
-            text = str(inner.get("error") or text) if isinstance(inner, dict) else text
+            text = str(inner.get("error") or inner.get("reason") or text) if isinstance(inner, dict) else text
         except ValueError:
             pass
         words.append(text)
     structured = result.get("structuredContent")
     return clip(" ".join(words) or (json.dumps(structured) if structured else "refused"), 160)
+
+
+def wake_answer(result: dict[str, Any]) -> str:
+    """What a connector's answer to a `WAKE_NOW` request establishes: "queued" (it will
+    send the prompt, or has), "refused" (it said `queued: false`: it has not sent one for
+    this id and will not), or "unknown". An error that does not say so explicitly is
+    unknown: the request may have been admitted before whatever failed."""
+    said = [result.get("structuredContent")]
+    for part in result.get("content") or []:
+        try:
+            said.append(json.loads(part.get("text") if isinstance(part, dict) else ""))
+        except (TypeError, ValueError):
+            pass
+    queued = next((one["queued"] for one in said if isinstance(one, dict) and isinstance(one.get("queued"), bool)), None)
+    if queued is False:
+        return "refused"
+    return "unknown" if result.get("isError") else "queued"
 
 
 def wake_held(store: Any, scene: Scene) -> bool:
@@ -889,7 +906,8 @@ class Mind:
         self._forget_wake(place)
         self._wake_refused(place, None)
         self.store.meta_set(f"wake:{place}", "0")
-        self.store.run("DELETE FROM meta WHERE key=?", (WAKE_ASKED + place,))
+        # What was asked of a `WAKE_NOW` tool stays: if the tool returns, an id whose
+        # outcome is unknown must be asked about again, not replaced.
 
     async def _arm_wake(self, sid: str, scene: Scene, turn: Turn | None, outside: bool = False, tending: bool = False) -> bool:
         """Ask the experience to give this conversation another turn when something
@@ -996,25 +1014,41 @@ class Mind:
         return True
 
     def _wake_asked(self, place: str) -> dict[str, Any]:
+        """What Vigil has asked of a place's `WAKE_NOW` tool and not yet seen come back:
+        `id`, `state` ("queued", "unknown" or "refused"), `at`, `for` (the ids of what
+        was due when it was asked), `again` (when an accepted one is next asked about),
+        and `open`: earlier ids whose prompts may still come."""
         try:
             record = json.loads(self.store.meta_get(WAKE_ASKED + place) or "{}")
         except ValueError:
             record = {}
         return record if isinstance(record, dict) else {}
 
-    def _wake_record(self, place: str, ident: str, state: str) -> None:
-        self.store.meta_set(WAKE_ASKED + place, json.dumps({"id": ident, "at": now(), "state": state}))
+    def _wake_record(self, place: str, record: dict[str, Any]) -> None:
+        if record.get("id") or record.get("open"):
+            self.store.meta_set(WAKE_ASKED + place, json.dumps(record))
+        else:
+            self.store.run("DELETE FROM meta WHERE key=?", (WAKE_ASKED + place,))
 
     def _wake_arrived(self, scene: Scene) -> None:
         """A turn the connector's wake tool started has come. It is Vigil's own wake-up
-        only if it carries the id of the request Vigil has outstanding for the place: an
-        id is random, used once, and never shown to people. Any other is a turn the agent
+        only if it carries an id Vigil asked with and has not yet seen come back: an id
+        is random, used once, and never shown to people. Any other is a turn the agent
         asked for itself, or text made to look like one, and settles nothing it surfaces
         by staying quiet."""
-        if scene.wake and scene.wake == self._wake_asked(scene.place).get("id"):
-            self.store.run("DELETE FROM meta WHERE key=?", (WAKE_ASKED + scene.place,))
+        asked = self._wake_asked(scene.place)
+        earlier = [ident for ident in asked.get("open") or [] if isinstance(ident, str)]
+        if scene.wake and scene.wake == asked.get("id"):
+            self._wake_record(scene.place, {"open": earlier})
+        elif scene.wake and scene.wake in earlier:
+            self._wake_record(scene.place, {**asked, "open": [ident for ident in earlier if ident != scene.wake]})
         else:
             scene.wake = None
+
+    def _wake_due(self, scene: Scene) -> list[int]:
+        """The ids of what a wake-up in this conversation could deliver now (see `_next_wake`)."""
+        return sorted(thought["id"] for thought in self.memory.thoughts_pending(scene.place)
+                      if thought["scope"] == "here" and not owner_work_seen(thought) and audience_fits(thought["audience"], scene.audience) and thought["due"] <= now())
 
     async def _ask_wake(self, scene: Scene, turn: Turn | None, server: dict[str, Any], tool: str, between: bool) -> bool:
         """`_arm_wake` for a connector whose tool keeps no time (`WAKE_NOW`). Vigil keeps
@@ -1023,11 +1057,15 @@ class Mind:
         sends the conversation an ordinary prompt of its own, so every approval in that
         turn is decided where it always is.
 
-        Each request carries an id. The connector answers an id it has seen with its
-        first answer and sends nothing more, so a request whose answer was lost is asked
-        again under the same id and cannot start two turns. A new id is used only once
-        the last one's outcome is known: it was refused, or it was accepted and its turn
-        is fifteen minutes overdue."""
+        Each request carries an id, and the connector sends at most one prompt per id,
+        with no promise of when. So an id whose prompt has not been seen is never
+        replaced for the same work: not after a lost answer, and not after any wait. It
+        is asked about again under the same id, which the connector answers as it did
+        the first time. A new id is made only for a request the connector said it did
+        not and will not send (`queued: false`), after an id's prompt has come, or for
+        work that was not due when the last one was asked. An earlier id stays Vigil's
+        own, so its prompt is recognised whenever it comes; with nothing left to
+        deliver, that turn is answered without the model."""
         key = f"wake:{scene.place}"  # for such a tool: the time before which nothing is asked
         wait = self._next_wake(scene)
         if wait is None or wait > float(self.config.mind("followup_chain_horizon_hours", 24)) * 3600:
@@ -1043,52 +1081,59 @@ class Mind:
             if asked.get("state") == "queued":
                 # A request the connector accepted while this turn ran can only be sent
                 # now: its fifteen minutes start here, not when it was asked.
-                self._wake_record(scene.place, str(asked.get("id") or ""), "queued")
+                self._wake_record(scene.place, {**asked, "again": now() + WAKE_GRACE})
             return True
         try:
-            not_before = float(self.store.meta_get(key) or 0)
-        except ValueError:
-            not_before = 0.0
+            not_before, again = float(self.store.meta_get(key) or 0), float(asked.get("again") or 0)
+        except (TypeError, ValueError):
+            not_before = again = 0.0
         if wait > 0 or now() < not_before:
             return True  # not yet
-        try:
-            asked_at = float(asked.get("at") or 0)
-        except (TypeError, ValueError):
-            asked_at = 0.0
-        if asked.get("state") == "queued" and now() < asked_at + WAKE_GRACE:
-            return True  # accepted: the connector sends its prompt when the conversation is free
-        ident = str(asked["id"]) if asked.get("state") == "unknown" and asked.get("id") else "vigil-" + secrets.token_hex(8)
+        due = self._wake_due(scene)
+        ident, state = str(asked.get("id") or ""), asked.get("state")
+        earlier = [one for one in asked.get("open") or [] if isinstance(one, str)]
+        if ident and state in ("queued", "unknown") and set(due) <= set(asked.get("for") or []):
+            if state == "queued" and now() < again:
+                return True  # accepted: the connector sends its prompt when it can
+            record = {**asked, "open": earlier}  # the same work: the same id, to learn what became of it
+        else:
+            if ident and state in ("queued", "unknown"):
+                earlier = (earlier + [ident])[-8:]  # new work gets a request of its own; that one's prompt may still come
+            ident = "vigil-" + secrets.token_hex(8)
+            record = {"id": ident, "at": now(), "for": due, "open": earlier}
         # Kept before the call: the connector's prompt can arrive before its answer does,
-        # and a daemon that stops in between must repeat this id, not make another.
-        self._wake_record(scene.place, ident, "unknown")
+        # and a daemon that stops in between must ask about this id again, not make another.
+        self._wake_record(scene.place, {**record, "state": "unknown"})
+        reason = None
         try:
             result = await call_tool(self.http, server, tool, {"id": ident, "note": WAKE_NOTE}, timeout=5.0)
-            if result.get("isError"):
-                raise WakeRefused(refusal_words(result))
+            answer = wake_answer(result)
+            if answer != "queued":
+                reason = refusal_words(result)
         except Exception as error:
-            if self._wake_asked(scene.place).get("id") != ident:
-                return True  # its prompt has already come: the answer no longer matters
-            # Only a refusal's own words are kept. A transport error can name the
-            # connector's address, and the record is in the state database.
-            http = re.search(r"HTTP (\d)\d\d", str(error))
-            reason = str(error) if isinstance(error, WakeRefused) else f"the connector answered {http.group(0)}" if http else f"the connector could not be reached ({type(error).__name__})"
+            # A transport error can name the connector's address, and the record is in
+            # the state database: only its kind is kept.
+            http = re.search(r"HTTP \d{3}", str(error))
+            # Turned away before the tool was reached: nothing was queued.
+            answer = "refused" if http and http.group(0) in ("HTTP 401", "HTTP 403", "HTTP 404") else "unknown"
+            reason = f"the connector answered {http.group(0)}" if http else f"the connector could not be reached ({type(error).__name__})"
             if await self._wake_tool_gone(scene, server, tool):
                 return False
-            # A refusal and a 4xx are answers: nothing was queued. Anything else may
-            # have reached the connector, so the next request repeats this id.
-            known = isinstance(error, WakeRefused) or bool(http and http.group(1) == "4")
-            self._wake_record(scene.place, ident, "refused" if known else "unknown")
-            count = self._wake_refused(scene.place, reason)
-            log.info("wake not asked for %s (%d in a row): %s", scene.place, count, reason)
             if http and http.group(0) in ("HTTP 401", "HTTP 403"):
                 self._forget_wake(scene.place)  # the connector's credential changed; the next turn there brings the new one
-            # Look again after a while, and less often while the answer stays the same.
-            self.store.meta_set(key, str(now() + min(1800, 300 * 2 ** min(count - 1, 6))))
-            return False
-        if self._wake_asked(scene.place).get("id") == ident:  # unless its prompt has already come
-            self._wake_record(scene.place, ident, "queued")
-        self._wake_refused(scene.place, None)
-        return True
+        if self._wake_asked(scene.place).get("id") != ident:
+            return True  # its prompt has already come: the answer no longer matters
+        if answer == "queued":
+            first = state != "queued" or record.get("id") != asked.get("id")
+            self._wake_record(scene.place, {**record, "state": "queued", "again": now() + (WAKE_GRACE if first else 1800)})
+            self._wake_refused(scene.place, None)
+            return True
+        self._wake_record(scene.place, {**record, "state": answer})
+        count = self._wake_refused(scene.place, reason or "refused")
+        log.info("wake not asked for %s (%d in a row): %s", scene.place, count, reason)
+        # Look again after a while, and less often while the answer stays the same.
+        self.store.meta_set(key, str(now() + min(1800, 300 * 2 ** min(count - 1, 6))))
+        return False
 
     def _wake_refused(self, place: str, reason: str | None) -> int:
         """Keep the record that a place's connector will not set a wake-up, or with no
