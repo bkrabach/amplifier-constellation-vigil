@@ -640,7 +640,13 @@ class Mind:
                 extras["recall"] = self.memory.search(scene, scene.heard, 4, asked=False)
             extras["can_return"] = self._wake_tool(sid, scene) is not None
             if scene.wake:
-                extras["lines"] = ["This turn exists because something you were holding is due. Deliver it now, or set a new follow-up if it should wait: it will not come back by itself."]
+                # Said for work as much as for words. On a live agent the earlier line, "Deliver
+                # it now, or set a new follow-up", met a follow-up that was a task in a game
+                # world: with nobody to tell, the agent restated its plan and held it again,
+                # one wake-up after another.
+                extras["lines"] = ["This turn exists because something you were holding is due, and nobody is waiting for a reply. "
+                                   "If it is something to do, do it now with the tools you have here, as far as this turn takes it. If it is something to say, say it. "
+                                   "Set a new follow-up only for what is still left, or for something that has to wait: it will not come back by itself."]
             if self._tools_missing(sid, link.runtime):
                 extras.setdefault("lines", []).append(TOOLS_MISSING)
                 if sid not in self.tools_warned:

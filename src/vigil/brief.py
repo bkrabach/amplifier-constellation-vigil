@@ -203,7 +203,9 @@ def compose(scene: Scene, memory: Memory, config: Config, extras: dict[str, Any]
         for thought in work:
             add(f"- (#{thought['id']}, set {ago(thought['ts'])}) {clip(thought['text'], OWNER_WORK_CHARS)}")
     if due:
-        add("To bring up now, in your own words. Skip any that no longer fit:")
+        # A wake-up turn exists for these, and nobody spoke: they are as often work as words.
+        add("Due now, and the reason for this turn. Each is yours to act on, by doing it here or by saying it. Skip any that no longer fit:" if scene.wake
+            else "To bring up now, in your own words. Skip any that no longer fit:")
         for thought in due:
             label = {"followup": "a follow-up you set", "task": "background work you delegated has finished", "held": "you were holding this"}.get(thought["kind"], thought["kind"])
             if thought["place"] != scene.place and thought["place_label"]:  # held somewhere else: say where, so it can be judged from here
@@ -213,7 +215,9 @@ def compose(scene: Scene, memory: Memory, config: Config, extras: dict[str, Any]
                 label = "your owner asked this of you in private, and you set it for this place"
             target = memory.name_of(thought["person"]) if thought["person"] else ""
             for_whom = f" for {target}" if target and thought["person"] != scene.actor_person else ""
-            add(f"- (#{thought['id']}, {label}{for_whom}, {ago(thought['ts'])}) {clip(thought['text'], OWNER_WORK_CHARS if sent or thought['kind'] == 'task' else 320)}")
+            # In the turn it woke, a follow-up is shown whole: it is the plan for the turn.
+            room = OWNER_WORK_CHARS if sent or thought["kind"] == "task" or scene.wake else 320
+            add(f"- (#{thought['id']}, {label}{for_whom}, {ago(thought['ts'])}) {clip(thought['text'], room)}")
 
     for line in extras.get("lines") or []:
         add(line)
